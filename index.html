@@ -614,7 +614,27 @@ function bandLabelEn(s) {
 // 装飾絵文字（左ほど“ありふれた”、右ほど“レア”）。高得点ほど多く・多彩に解禁される。
 const DECOR = ["✨","⭐","🎉","💫","🌟","🎊","🎈","🏆","👑","🚀","🌈","💎","🔥","🥇","🦄","🍾","🎆","🪅"];
 const SAD_DECOR = ["💧","🌧️","🥀"];
-// 簡易シード乱数（同じスコアでも毎回少し変化を出すため Math.random を併用）
+// Canvas 用のスコア色（scoreColor() の var(--*) は canvas で無効なため実HEXで返す）
+function scoreHex(s) {
+  if (s >= 85) return "#34d399";
+  if (s >= 70) return "#a3e635";
+  if (s >= 50) return "#fbbf24";
+  return "#f87171";
+}
+// 縁取り(dark stroke)＋ドロップシャドウ付きでテキストを描き、背景に埋もれないようにする
+function stkText(ctx, text, x, y, font, fill, lw) {
+  ctx.save();
+  ctx.font = font;
+  ctx.lineJoin = "round"; ctx.miterLimit = 2;
+  ctx.strokeStyle = "rgba(0,0,0,.82)"; ctx.lineWidth = lw;
+  ctx.shadowColor = "rgba(0,0,0,.55)"; ctx.shadowBlur = lw * 1.6;
+  ctx.shadowOffsetX = 0; ctx.shadowOffsetY = Math.max(2, lw * 0.3);
+  ctx.strokeText(text, x, y);          // 影付きの黒縁
+  ctx.shadowColor = "transparent";     // 塗りには影を重ねない
+  ctx.fillStyle = fill;
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
 function drawSticker(a) {
   const s = a.overall;
   const cv = $("sticker"), ctx = cv.getContext("2d");
@@ -632,7 +652,7 @@ function drawSticker(a) {
   ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
 
   // 非線形に装飾を散りばめる（数も種類も score に対して急カーブ）
-  const accent = scoreColor(s);
+  const accent = scoreHex(s);
   if (s >= 40) {
     const types = Math.max(1, Math.round(Math.pow(s / 100, 2.5) * DECOR.length)); // 解禁“種類数”
     const count = Math.round(Math.pow(s / 100, 3) * 60);                          // 配置“個数”
@@ -641,8 +661,8 @@ function drawSticker(a) {
       const e = pool[Math.floor(Math.random() * pool.length)];
       const x = 60 + Math.random() * (W - 120);
       const y = 60 + Math.random() * (H - 120);
-      // 中央のテキスト領域(縦 320〜760)は避ける
-      if (y > 300 && y < 780 && x > 120 && x < W - 120) continue;
+      // 中央のテキスト列（スコア〜フッター）は避ける。ヘッダー上部の装飾は許可。
+      if (x > 150 && x < W - 150 && y > 280 && y < 1010) continue;
       const sz = 30 + Math.random() * (28 + s);
       ctx.save();
       ctx.globalAlpha = 0.55 + Math.random() * 0.45;
@@ -662,40 +682,33 @@ function drawSticker(a) {
     }
   }
 
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+
   // ヘッダー
-  ctx.textAlign = "center"; ctx.fillStyle = "rgba(255,255,255,.85)";
-  ctx.font = "bold 44px sans-serif";
-  ctx.fillText("🎙️ 声チェッカー", W / 2, 120);
+  stkText(ctx, "🎙️ 声チェッカー", W / 2, 120, "bold 46px sans-serif", "rgba(255,255,255,.95)", 7);
 
-  // 顔
-  ctx.font = "200px sans-serif"; ctx.textBaseline = "middle";
+  // 顔（絵文字は縁取りせず、影だけで分離）
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,.45)"; ctx.shadowBlur = 26; ctx.shadowOffsetY = 6;
+  ctx.font = "200px sans-serif";
   ctx.fillText(faceFor(s), W / 2, 360);
+  ctx.restore();
 
-  // 総合スコア
-  ctx.fillStyle = accent;
-  ctx.font = "bold 300px sans-serif";
-  ctx.fillText(String(s), W / 2, 600);
-  ctx.fillStyle = "rgba(255,255,255,.9)";
-  ctx.font = "bold 56px sans-serif";
-  ctx.fillText("点 / 100", W / 2, 730);
-  ctx.fillStyle = accent;
-  ctx.font = "bold 64px sans-serif";
-  ctx.fillText(bandLabelEn(s) + " ・ " + scoreLabel(s), W / 2, 815);
+  // 総合スコア（白＋太い縁取りで確実にコントラスト確保）
+  stkText(ctx, String(s), W / 2, 600, "bold 300px sans-serif", "#ffffff", 22);
+  stkText(ctx, "点 / 100", W / 2, 730, "bold 56px sans-serif", "rgba(255,255,255,.95)", 8);
+  stkText(ctx, bandLabelEn(s) + " ・ " + scoreLabel(s), W / 2, 815, "bold 64px sans-serif", accent, 9);
 
   // 各軸スコア
-  ctx.fillStyle = "rgba(255,255,255,.92)";
-  ctx.font = "44px sans-serif";
   const m = a.metrics;
-  ctx.fillText(`音量 ${m.vol.score}　ノイズ ${m.noise.score}　音割れ ${m.clip.score}`, W / 2, 905);
+  stkText(ctx, `音量 ${m.vol.score}　ノイズ ${m.noise.score}　音割れ ${m.clip.score}`, W / 2, 905, "bold 46px sans-serif", "#ffffff", 7);
 
   // 端末・マイク（任意）
   const dm = deviceMicLabel();
-  if (dm) { ctx.fillStyle = "rgba(255,255,255,.7)"; ctx.font = "34px sans-serif"; ctx.fillText(dm, W / 2, 965); }
+  if (dm) stkText(ctx, dm, W / 2, 963, "34px sans-serif", "rgba(255,255,255,.92)", 5);
 
   // フッター
-  ctx.fillStyle = "rgba(255,255,255,.6)";
-  ctx.font = "32px sans-serif";
-  ctx.fillText("snaka.github.io/meeting-voice-check", W / 2, 1030);
+  stkText(ctx, "snaka.github.io/meeting-voice-check", W / 2, 1028, "32px sans-serif", "rgba(255,255,255,.85)", 4);
 }
 
 function deviceMicLabel() {
