@@ -157,22 +157,32 @@
     </div>
 
     <div class="scores" id="scoreCards"></div>
-
-    <div class="row" style="margin-top:18px;">
-      <button id="saveBtn" class="btn-ghost">💾 この結果を履歴に保存</button>
-      <span class="hint" id="saveMsg" style="margin:0;"></span>
-    </div>
   </div>
 
-  <!-- 履歴パネル -->
-  <div class="panel">
-    <h2>3. 履歴と機種別ランキング</h2>
-    <div class="tabs">
-      <button id="tabHist" class="active">履歴</button>
-      <button id="tabRank">機種別ランキング</button>
+  <!-- 共有パネル -->
+  <div class="panel hidden" id="sharePanel">
+    <h2>3. 結果をシェア</h2>
+    <p class="hint" style="margin-top:0">スコアをステッカー画像にして共有できます。高得点ほど絵柄が増えて豪華になります 🎉</p>
+
+    <div class="row" style="margin-bottom:14px;">
+      <button id="copyImgBtn" class="btn-primary">🖼️ ステッカーを画像コピー</button>
+      <button id="dlImgBtn" class="btn-ghost">⬇ 画像を保存</button>
+      <button id="copyTxtBtn" class="btn-ghost">📋 テキストをコピー</button>
+      <button id="webShareBtn" class="btn-ghost hidden">📤 共有…</button>
     </div>
-    <div id="histView"></div>
-    <div id="rankView" class="hidden"></div>
+
+    <div id="stickerWrap" style="text-align:center;margin-bottom:14px;">
+      <canvas id="sticker" width="1080" height="1080" style="width:320px;height:320px;max-width:100%;border-radius:16px;"></canvas>
+    </div>
+
+    <label style="margin-bottom:8px;">SNS・チャットに投稿（テキストが入力されます。画像は ⌘V / Ctrl+V で貼り付け）</label>
+    <div class="row" id="snsRow">
+      <button class="btn-ghost share-btn" data-net="x">𝕏 (Twitter)</button>
+      <button class="btn-ghost share-btn" data-net="bluesky">🦋 Bluesky</button>
+      <button class="btn-ghost share-btn" data-net="mixi2">🌸 mixi2</button>
+      <button class="btn-ghost share-btn" data-net="slack">💬 社内Slack</button>
+    </div>
+    <p class="hint" id="shareMsg" style="min-height:1.2em;"></p>
   </div>
 </div>
 
@@ -188,8 +198,9 @@ let rafId = 0;
 let recordedBuffer = null;     // {samples:Float32Array, sampleRate}
 let lastAnalysis = null;       // 診断結果
 let playSource = null;
+let stickerBlob = null;        // 生成済みステッカーPNG (Blob)
 const $ = id => document.getElementById(id);
-const STORE_KEY = "voiceChecker.history.v1";
+const SHARE_URL = "https://snaka.github.io/meeting-voice-check/";
 
 /* ====================== 録音 ====================== */
 $("recBtn").addEventListener("click", async () => {
@@ -293,8 +304,11 @@ function stopRecording() {
   renderResult(lastAnalysis);
   drawWave(samples);
   prepareDownload(samples, recSampleRate);
+  drawSticker(lastAnalysis);
+  stickerBlob = null;            // 内容が変わったので作り直し
+  $("shareMsg").textContent = "";
   $("resultPanel").classList.remove("hidden");
-  $("saveMsg").textContent = "";
+  $("sharePanel").classList.remove("hidden");
   $("resultPanel").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
@@ -584,84 +598,192 @@ function encodeWav(samples, sr) {
   return buf;
 }
 
-/* ====================== 履歴 ====================== */
-function loadHistory() {
-  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch (e) { return []; }
+/* ====================== ステッカー画像 ====================== */
+// スコア帯ごとの顔絵文字（高得点ほど楽しい、低得点ほど残念）
+function faceFor(s) {
+  if (s >= 95) return "🤩"; if (s >= 90) return "🥳"; if (s >= 85) return "😎";
+  if (s >= 75) return "😄"; if (s >= 65) return "🙂"; if (s >= 55) return "😌";
+  if (s >= 45) return "😐"; if (s >= 35) return "😕"; if (s >= 25) return "😟";
+  if (s >= 15) return "😢"; if (s >= 5) return "😭"; return "💀";
 }
-function saveHistory(list) { localStorage.setItem(STORE_KEY, JSON.stringify(list)); }
+function bandLabelEn(s) {
+  if (s >= 95) return "PERFECT!!"; if (s >= 90) return "EXCELLENT"; if (s >= 80) return "GREAT";
+  if (s >= 70) return "GOOD"; if (s >= 50) return "NOT BAD"; if (s >= 30) return "KEEP TRYING";
+  return "OH NO...";
+}
+// 装飾絵文字（左ほど“ありふれた”、右ほど“レア”）。高得点ほど多く・多彩に解禁される。
+const DECOR = ["✨","⭐","🎉","💫","🌟","🎊","🎈","🏆","👑","🚀","🌈","💎","🔥","🥇","🦄","🍾","🎆","🪅"];
+const SAD_DECOR = ["💧","🌧️","🥀"];
+// 簡易シード乱数（同じスコアでも毎回少し変化を出すため Math.random を併用）
+function drawSticker(a) {
+  const s = a.overall;
+  const cv = $("sticker"), ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
 
-$("saveBtn").addEventListener("click", () => {
-  if (!lastAnalysis) return;
-  const list = loadHistory();
-  list.unshift({
-    ts: lastAnalysis.ts,
-    device: $("device").value.trim() || "(未入力)",
-    mic: $("mic").value.trim() || "(未入力)",
-    overall: lastAnalysis.overall,
-    vol: lastAnalysis.metrics.vol.score,
-    noise: lastAnalysis.metrics.noise.score,
-    clip: lastAnalysis.metrics.clip.score,
-  });
-  saveHistory(list.slice(0, 200));
-  $("saveMsg").textContent = "✅ 保存しました";
-  renderHistory(); renderRanking();
+  // 背景グラデーション（スコア帯で色を変える）
+  let c1, c2;
+  if (s >= 85) { c1 = "#11371f"; c2 = "#1f7a4d"; }
+  else if (s >= 70) { c1 = "#0f2747"; c2 = "#1f5fb0"; }
+  else if (s >= 50) { c1 = "#3a2f10"; c2 = "#8a6d1f"; }
+  else { c1 = "#1a1f2b"; c2 = "#39404f"; }
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, c1); bg.addColorStop(1, c2);
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+  // 非線形に装飾を散りばめる（数も種類も score に対して急カーブ）
+  const accent = scoreColor(s);
+  if (s >= 40) {
+    const types = Math.max(1, Math.round(Math.pow(s / 100, 2.5) * DECOR.length)); // 解禁“種類数”
+    const count = Math.round(Math.pow(s / 100, 3) * 60);                          // 配置“個数”
+    const pool = DECOR.slice(0, types);
+    for (let i = 0; i < count; i++) {
+      const e = pool[Math.floor(Math.random() * pool.length)];
+      const x = 60 + Math.random() * (W - 120);
+      const y = 60 + Math.random() * (H - 120);
+      // 中央のテキスト領域(縦 320〜760)は避ける
+      if (y > 300 && y < 780 && x > 120 && x < W - 120) continue;
+      const sz = 30 + Math.random() * (28 + s);
+      ctx.save();
+      ctx.globalAlpha = 0.55 + Math.random() * 0.45;
+      ctx.translate(x, y); ctx.rotate((Math.random() - 0.5) * 1.2);
+      ctx.font = `${sz}px sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(e, 0, 0);
+      ctx.restore();
+    }
+  } else {
+    const n = 3 - Math.floor(s / 15); // 低得点ほど数も少なく寂しく
+    for (let i = 0; i < Math.max(1, n); i++) {
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      ctx.font = "54px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(SAD_DECOR[i % SAD_DECOR.length], 120 + i * 130, 150);
+      ctx.restore();
+    }
+  }
+
+  // ヘッダー
+  ctx.textAlign = "center"; ctx.fillStyle = "rgba(255,255,255,.85)";
+  ctx.font = "bold 44px sans-serif";
+  ctx.fillText("🎙️ 声チェッカー", W / 2, 120);
+
+  // 顔
+  ctx.font = "200px sans-serif"; ctx.textBaseline = "middle";
+  ctx.fillText(faceFor(s), W / 2, 360);
+
+  // 総合スコア
+  ctx.fillStyle = accent;
+  ctx.font = "bold 300px sans-serif";
+  ctx.fillText(String(s), W / 2, 600);
+  ctx.fillStyle = "rgba(255,255,255,.9)";
+  ctx.font = "bold 56px sans-serif";
+  ctx.fillText("点 / 100", W / 2, 730);
+  ctx.fillStyle = accent;
+  ctx.font = "bold 64px sans-serif";
+  ctx.fillText(bandLabelEn(s) + " ・ " + scoreLabel(s), W / 2, 815);
+
+  // 各軸スコア
+  ctx.fillStyle = "rgba(255,255,255,.92)";
+  ctx.font = "44px sans-serif";
+  const m = a.metrics;
+  ctx.fillText(`音量 ${m.vol.score}　ノイズ ${m.noise.score}　音割れ ${m.clip.score}`, W / 2, 905);
+
+  // 端末・マイク（任意）
+  const dm = deviceMicLabel();
+  if (dm) { ctx.fillStyle = "rgba(255,255,255,.7)"; ctx.font = "34px sans-serif"; ctx.fillText(dm, W / 2, 965); }
+
+  // フッター
+  ctx.fillStyle = "rgba(255,255,255,.6)";
+  ctx.font = "32px sans-serif";
+  ctx.fillText("snaka.github.io/meeting-voice-check", W / 2, 1030);
+}
+
+function deviceMicLabel() {
+  const d = ($("device").value || "").trim();
+  const mi = ($("mic").value || "").trim();
+  if (d && mi) return `${d} ／ ${mi}`;
+  return d || mi || "";
+}
+function shareText() {
+  const a = lastAnalysis; if (!a) return "";
+  const dm = deviceMicLabel();
+  return `🎙️声チェッカー 診断結果\n総合 ${a.overall}点（${scoreLabel(a.overall)}）${faceFor(a.overall)}\n`
+    + `音量${a.metrics.vol.score} / ノイズ${a.metrics.noise.score} / 音割れ${a.metrics.clip.score}`
+    + (dm ? `\n${dm}` : "")
+    + `\n#声チェッカー\n${SHARE_URL}`;
+}
+
+function toast(msg) { $("shareMsg").textContent = msg; }
+
+// ステッカーを Blob 化（生成済みならキャッシュ）
+function getStickerBlob() {
+  if (stickerBlob) return Promise.resolve(stickerBlob);
+  return new Promise(res => $("sticker").toBlob(b => { stickerBlob = b; res(b); }, "image/png"));
+}
+async function copyImageToClipboard() {
+  const blob = await getStickerBlob();
+  if (!navigator.clipboard || !window.ClipboardItem) throw new Error("clipboard unsupported");
+  await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+}
+
+$("copyImgBtn").addEventListener("click", async () => {
+  try { await copyImageToClipboard(); toast("✅ ステッカー画像をコピーしました。投稿欄に ⌘V / Ctrl+V で貼り付けできます。"); }
+  catch (e) { toast("⚠️ 画像コピーに未対応のブラウザです。「画像を保存」をご利用ください。"); }
+});
+$("dlImgBtn").addEventListener("click", async () => {
+  const blob = await getStickerBlob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `voice-score-${lastAnalysis ? lastAnalysis.overall : 0}.png`;
+  a.click(); setTimeout(() => URL.revokeObjectURL(url), 4000);
+  toast("⬇ 画像を保存しました。");
+});
+$("copyTxtBtn").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(shareText()); toast("📋 共有テキストをコピーしました。"); }
+  catch (e) { toast("⚠️ テキストコピーに失敗しました。"); }
 });
 
-function fmtDate(ts) {
-  const d = new Date(ts);
-  const p = n => String(n).padStart(2, "0");
-  return `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-function badge(s) {
-  return `<span class="pill" style="background:${scoreColor(s)};color:#0d1320">${s}</span>`;
-}
+// Web Share API（主にモバイル）：画像ファイルごと共有
+(function initWebShare() {
+  if (navigator.canShare) {
+    $("webShareBtn").classList.remove("hidden");
+    $("webShareBtn").addEventListener("click", async () => {
+      try {
+        const blob = await getStickerBlob();
+        const file = new File([blob], "voice-score.png", { type: "image/png" });
+        const data = { text: shareText() };
+        if (navigator.canShare({ files: [file] })) data.files = [file];
+        await navigator.share(data);
+      } catch (e) { if (e.name !== "AbortError") toast("⚠️ 共有がキャンセル/失敗しました。"); }
+    });
+  }
+})();
 
-function renderHistory() {
-  const list = loadHistory();
-  if (!list.length) { $("histView").innerHTML = `<p class="empty">まだ履歴がありません。録音して「履歴に保存」すると蓄積されます。</p>`; return; }
-  $("histView").innerHTML = `<table>
-    <thead><tr><th>日時</th><th>端末 / マイク</th><th class="num">総合</th><th class="num">音量</th><th class="num">ノイズ</th><th class="num">音割れ</th><th></th></tr></thead>
-    <tbody>${list.map((r, i) => `<tr>
-      <td>${fmtDate(r.ts)}</td>
-      <td>${esc(r.device)}<br><span style="color:var(--muted)">${esc(r.mic)}</span></td>
-      <td class="num">${badge(r.overall)}</td>
-      <td class="num">${r.vol}</td><td class="num">${r.noise}</td><td class="num">${r.clip}</td>
-      <td class="num"><button class="btn-ghost" style="padding:3px 9px;font-size:.78rem" data-del="${i}">削除</button></td>
-    </tr>`).join("")}</tbody></table>`;
-  $("histView").querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => {
-    const list = loadHistory(); list.splice(+b.dataset.del, 1); saveHistory(list); renderHistory(); renderRanking();
-  }));
-}
-
-function renderRanking() {
-  const list = loadHistory();
-  if (!list.length) { $("rankView").innerHTML = `<p class="empty">履歴がたまると、端末・マイクの組み合わせごとの平均スコアをランキング表示します。</p>`; return; }
-  const groups = {};
-  list.forEach(r => {
-    const key = r.device + " ／ " + r.mic;
-    (groups[key] ||= []).push(r);
+// 各SNSボタン：まず画像＋テキストをクリップボードへ。X/Bluesky はテキスト自動入力の投稿画面を開く。
+document.querySelectorAll(".share-btn").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    const net = btn.dataset.net;
+    let copied = false;
+    try { await copyImageToClipboard(); copied = true; } catch (e) {}
+    try { await navigator.clipboard.writeText(shareText()); } catch (e) {}
+    const txt = encodeURIComponent(shareText());
+    if (net === "x") {
+      window.open(`https://twitter.com/intent/tweet?text=${txt}`, "_blank", "noopener");
+      toast(copied ? "𝕏 の投稿画面を開きました。画像は ⌘V で貼り付けできます。" : "𝕏 の投稿画面を開きました。");
+    } else if (net === "bluesky") {
+      window.open(`https://bsky.app/intent/compose?text=${txt}`, "_blank", "noopener");
+      toast(copied ? "Bluesky の投稿画面を開きました。画像は ⌘V で貼り付けできます。" : "Bluesky の投稿画面を開きました。");
+    } else if (net === "mixi2") {
+      // mixi2 には公式のWeb共有インテントが無いため、コピー→アプリ/サイトで貼り付け
+      window.open("https://mixi.social/", "_blank", "noopener");
+      toast("mixi2 を開きました。テキストと画像をコピー済みです。投稿欄に貼り付けてください（⌘V）。");
+    } else if (net === "slack") {
+      toast(copied
+        ? "💬 テキストと画像をコピーしました。Slack の投稿欄に貼り付けてください（⌘V / Ctrl+V）。"
+        : "💬 テキストをコピーしました。Slack に貼り付けてください（⌘V / Ctrl+V）。");
+    }
   });
-  const rows = Object.entries(groups).map(([key, rs]) => ({
-    key,
-    n: rs.length,
-    overall: avg(rs.map(r => r.overall)),
-    vol: avg(rs.map(r => r.vol)),
-    noise: avg(rs.map(r => r.noise)),
-    clip: avg(rs.map(r => r.clip)),
-  })).sort((a, b) => b.overall - a.overall);
-  $("rankView").innerHTML = `<p class="hint" style="margin-top:0">この端末に保存された自分のデータ内での平均ランキングです。（将来：全ユーザー統計に拡張予定）</p>
-  <table><thead><tr><th>#</th><th>端末 ／ マイク</th><th class="num">回数</th><th class="num">総合(平均)</th><th class="num">音量</th><th class="num">ノイズ</th><th class="num">音割れ</th></tr></thead>
-  <tbody>${rows.map((r, i) => `<tr>
-    <td>${i+1}</td><td>${esc(r.key)}</td><td class="num">${r.n}</td>
-    <td class="num">${badge(r.overall)}</td><td class="num">${r.vol}</td><td class="num">${r.noise}</td><td class="num">${r.clip}</td>
-  </tr>`).join("")}</tbody></table>`;
-}
-const avg = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
-const esc = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-
-/* タブ切替 */
-$("tabHist").addEventListener("click", () => { $("tabHist").classList.add("active"); $("tabRank").classList.remove("active"); $("histView").classList.remove("hidden"); $("rankView").classList.add("hidden"); });
-$("tabRank").addEventListener("click", () => { $("tabRank").classList.add("active"); $("tabHist").classList.remove("active"); $("rankView").classList.remove("hidden"); $("histView").classList.add("hidden"); renderRanking(); });
+});
 
 /* ====================== 共通 ====================== */
 function showError(msg) {
@@ -669,9 +791,6 @@ function showError(msg) {
   if (!msg) { b.classList.add("hidden"); b.textContent = ""; return; }
   b.classList.remove("hidden"); b.textContent = msg;
 }
-
-renderHistory();
-renderRanking();
 </script>
 </body>
 </html>
