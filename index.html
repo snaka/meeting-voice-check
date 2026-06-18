@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>声チェッカー — オンライン会議の声を自己診断</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #1a2130;
+    --panel2: #222b3d;
+    --text: #e6ebf5;
+    --muted: #8a96ab;
+    --accent: #4f9dff;
+    --good: #34d399;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --border: #2c3a52;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 24px 18px 80px; }
+  header h1 { font-size: 1.6rem; margin: 0 0 6px; }
+  header p { color: var(--muted); margin: 0 0 20px; font-size: 0.92rem; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 18px;
+  }
+  h2 { font-size: 1.1rem; margin: 0 0 14px; }
+  label { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 4px; }
+  input[type=text], select {
+    width: 100%;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 9px 11px;
+    font-size: 0.95rem;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  button {
+    font: inherit;
+    border: none;
+    border-radius: 10px;
+    padding: 11px 20px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: transform .05s, opacity .15s;
+  }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-rec { background: var(--bad); color: #fff; }
+  .btn-rec.recording { background: #fff; color: var(--bad); animation: pulse 1.1s infinite; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(248,113,113,.5);} 50% { box-shadow: 0 0 0 10px rgba(248,113,113,0);} }
+  .timer { font-variant-numeric: tabular-nums; font-size: 1.3rem; font-weight: 700; min-width: 64px; }
+  .meter { height: 14px; background: var(--panel2); border-radius: 7px; overflow: hidden; flex: 1; min-width: 140px; }
+  .meter-fill { height: 100%; width: 0%; background: linear-gradient(90deg,var(--good),var(--warn),var(--bad)); transition: width .05s; }
+  .hint { font-size: 0.82rem; color: var(--muted); margin-top: 10px; }
+  .toggles { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 14px; }
+  .toggles label { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 0.85rem; cursor: pointer; }
+  canvas { width: 100%; height: 90px; display: block; background: var(--panel2); border-radius: 8px; }
+  .scores { display: grid; grid-template-columns: repeat(2,1fr); gap: 14px; margin-top: 8px; }
+  @media (max-width: 560px) { .scores { grid-template-columns: 1fr; } }
+  .scard { background: var(--panel2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .scard .top { display: flex; justify-content: space-between; align-items: baseline; }
+  .scard .name { font-weight: 600; }
+  .scard .val { font-size: 1.7rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .scard .unit { font-size: 0.8rem; color: var(--muted); }
+  .bar { height: 8px; background: #0d1320; border-radius: 4px; margin: 8px 0; overflow: hidden; }
+  .bar > div { height: 100%; border-radius: 4px; }
+  .scard .advice { font-size: 0.82rem; color: var(--muted); }
+  .overall { text-align: center; padding: 8px 0 4px; }
+  .overall .big { font-size: 3rem; font-weight: 800; line-height: 1; }
+  .overall .lbl { color: var(--muted); font-size: 0.85rem; }
+  .hidden { display: none; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 700; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+  .tabs button { padding: 6px 14px; font-size: 0.85rem; }
+  .tabs .active { background: var(--accent); color: #fff; }
+  .empty { color: var(--muted); font-size: 0.88rem; padding: 8px 0; }
+  .err { background: #3a1c20; border: 1px solid var(--bad); color: #ffd9d9; padding: 12px; border-radius: 8px; font-size: 0.88rem; }
+  a.dl { color: var(--accent); font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🎙️ 声チェッカー</h1>
+    <p>オンライン会議で自分の声が相手にどう聞こえているかを録音・再生し、音量／ノイズ／音割れの3軸で定量診断します。データはすべてこの端末内（ブラウザ）にのみ保存され、外部へ送信されません。</p>
+  </header>
+
+  <div id="errBox" class="err hidden"></div>
+
+  <!-- 録音パネル -->
+  <div class="panel">
+    <h2>1. 録音</h2>
+    <div class="grid2" style="margin-bottom:14px;">
+      <div>
+        <label>端末の機種（任意）</label>
+        <input type="text" id="device" placeholder="例: MacBook Pro 14 (M3)" />
+      </div>
+      <div>
+        <label>マイクの機種（任意）</label>
+        <input type="text" id="mic" placeholder="例: 内蔵マイク / Yeti Nano" />
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="recBtn" class="btn-rec">● 録音開始</button>
+      <span class="timer" id="timer">0.0s</span>
+      <div class="meter"><div class="meter-fill" id="meterFill"></div></div>
+    </div>
+
+    <div class="toggles">
+      <label><input type="checkbox" id="tEcho"> エコーキャンセル</label>
+      <label><input type="checkbox" id="tNoise"> ノイズ抑制</label>
+      <label><input type="checkbox" id="tAgc"> 自動音量調整(AGC)</label>
+    </div>
+    <p class="hint">💡 正確に診断するため、初期状態ではブラウザの音声処理をすべて<strong>オフ</strong>にしています（生のマイク信号を測定）。会議アプリと同じ条件で確かめたい場合はオンにしてください。<br>
+    📢 5〜10秒、普段の会議と同じ声量・距離で何か話してみましょう（例：自己紹介）。</p>
+  </div>
+
+  <!-- 結果パネル -->
+  <div class="panel hidden" id="resultPanel">
+    <h2>2. 再生と診断結果</h2>
+    <div class="row" style="margin-bottom:14px;">
+      <button id="playBtn" class="btn-primary">▶ 再生</button>
+      <a class="dl" id="dlLink" href="#" download="my-voice.wav">⬇ WAVをダウンロード</a>
+    </div>
+    <canvas id="wave" width="840" height="90"></canvas>
+
+    <div class="overall" style="margin-top:18px;">
+      <div class="big" id="ovScore">--</div>
+      <div class="lbl">総合スコア（100点満点）<span id="ovLabel"></span></div>
+    </div>
+
+    <div class="scores" id="scoreCards"></div>
+
+    <div class="row" style="margin-top:18px;">
+      <button id="saveBtn" class="btn-ghost">💾 この結果を履歴に保存</button>
+      <span class="hint" id="saveMsg" style="margin:0;"></span>
+    </div>
+  </div>
+
+  <!-- 履歴パネル -->
+  <div class="panel">
+    <h2>3. 履歴と機種別ランキング</h2>
+    <div class="tabs">
+      <button id="tabHist" class="active">履歴</button>
+      <button id="tabRank">機種別ランキング</button>
+    </div>
+    <div id="histView"></div>
+    <div id="rankView" class="hidden"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ====================== 状態 ====================== */
+let audioCtx = null, stream = null, processor = null, sourceNode = null, analyser = null, silentGain = null;
+let recChunks = [];            // Float32Array[]
+let recSampleRate = 48000;
+let recording = false;
+let recStartTime = 0;
+let rafId = 0;
+let recordedBuffer = null;     // {samples:Float32Array, sampleRate}
+let lastAnalysis = null;       // 診断結果
+let playSource = null;
+const $ = id => document.getElementById(id);
+const STORE_KEY = "voiceChecker.history.v1";
+
+/* ====================== 録音 ====================== */
+$("recBtn").addEventListener("click", async () => {
+  if (!recording) await startRecording();
+  else stopRecording();
+});
+
+async function startRecording() {
+  showError("");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showError("このブラウザは録音(getUserMedia)に対応していません。Chrome/Edge/Safari の最新版をお使いください。");
+    return;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: $("tEcho").checked,
+        noiseSuppression: $("tNoise").checked,
+        autoGainControl: $("tAgc").checked,
+      },
+      video: false,
+    });
+  } catch (e) {
+    showError("マイクへのアクセスが許可されませんでした（" + e.name + "）。ブラウザのアドレスバーのマイク許可をご確認ください。");
+    return;
+  }
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  recSampleRate = audioCtx.sampleRate;
+  sourceNode = audioCtx.createMediaStreamSource(stream);
+
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 1024;
+  sourceNode.connect(analyser);
+
+  processor = audioCtx.createScriptProcessor(4096, 1, 1);
+  recChunks = [];
+  processor.onaudioprocess = (ev) => {
+    const ch = ev.inputBuffer.getChannelData(0);
+    recChunks.push(new Float32Array(ch));
+  };
+  sourceNode.connect(processor);
+  // ScriptProcessor を動かすため destination に繋ぐ。フィードバック防止に gain=0。
+  silentGain = audioCtx.createGain();
+  silentGain.gain.value = 0;
+  processor.connect(silentGain);
+  silentGain.connect(audioCtx.destination);
+
+  recording = true;
+  recStartTime = performance.now();
+  $("recBtn").textContent = "■ 停止";
+  $("recBtn").classList.add("recording");
+  tickMeter();
+}
+
+function tickMeter() {
+  if (!recording) return;
+  const elapsed = (performance.now() - recStartTime) / 1000;
+  $("timer").textContent = elapsed.toFixed(1) + "s";
+  const buf = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+  const rms = Math.sqrt(sum / buf.length);
+  const db = 20 * Math.log10(rms + 1e-9);
+  // -60dB..0dB を 0..100% にマップ
+  const pct = Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+  $("meterFill").style.width = pct + "%";
+  rafId = requestAnimationFrame(tickMeter);
+}
+
+function stopRecording() {
+  recording = false;
+  cancelAnimationFrame(rafId);
+  $("meterFill").style.width = "0%";
+  $("recBtn").textContent = "● 録音開始";
+  $("recBtn").classList.remove("recording");
+
+  if (processor) { processor.disconnect(); processor.onaudioprocess = null; }
+  if (sourceNode) sourceNode.disconnect();
+  if (silentGain) silentGain.disconnect();
+  if (stream) stream.getTracks().forEach(t => t.stop());
+
+  // チャンク結合
+  let total = 0;
+  recChunks.forEach(c => total += c.length);
+  const samples = new Float32Array(total);
+  let off = 0;
+  recChunks.forEach(c => { samples.set(c, off); off += c.length; });
+
+  if (audioCtx) audioCtx.close();
+  audioCtx = null;
+
+  if (total < recSampleRate * 0.3) {
+    showError("録音が短すぎます。1秒以上話してから停止してください。");
+    return;
+  }
+
+  recordedBuffer = { samples, sampleRate: recSampleRate };
+  lastAnalysis = analyze(samples, recSampleRate);
+  renderResult(lastAnalysis);
+  drawWave(samples);
+  prepareDownload(samples, recSampleRate);
+  $("resultPanel").classList.remove("hidden");
+  $("saveMsg").textContent = "";
+  $("resultPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* ====================== 音声解析 ====================== */
+function analyze(samples, sr) {
+  const frameLen = Math.floor(sr * 0.02);   // 20ms フレーム
+  const nFrames = Math.floor(samples.length / frameLen);
+  const frameDb = [];
+  for (let f = 0; f < nFrames; f++) {
+    let sum = 0;
+    const start = f * frameLen;
+    for (let i = 0; i < frameLen; i++) { const s = samples[start + i]; sum += s * s; }
+    const rms = Math.sqrt(sum / frameLen);
+    frameDb.push(20 * Math.log10(rms + 1e-9));
+  }
+  const sorted = [...frameDb].sort((a, b) => a - b);
+  const pct = p => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))))];
+
+  // ノイズフロア = 下位10%、発話レベル = 上位帯の中央付近
+  const noiseDb = pct(0.10);
+  const loudDb = pct(0.95);
+  // 発話フレーム = ノイズフロア+8dB を超えるフレーム
+  const speechThresh = noiseDb + 8;
+  const speechFrames = frameDb.filter(d => d > speechThresh);
+  const speechRatio = speechFrames.length / Math.max(1, nFrames);
+  const voicedDb = speechFrames.length
+    ? median(speechFrames)
+    : loudDb;
+  const snr = voicedDb - noiseDb;
+
+  // クリッピング: |sample| >= 0.985 の割合
+  let clipped = 0, peak = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const a = Math.abs(samples[i]);
+    if (a > peak) peak = a;
+    if (a >= 0.985) clipped++;
+  }
+  const clipPct = clipped / samples.length * 100;
+  const peakDb = 20 * Math.log10(peak + 1e-9);
+
+  const vol = scoreVolume(voicedDb, speechRatio);
+  const noise = scoreSNR(snr);
+  const clip = scoreClip(clipPct, peakDb);
+  const overall = Math.round((vol.score + noise.score + clip.score) / 3);
+
+  return {
+    ts: Date.now(),
+    durationSec: samples.length / sr,
+    voicedDb, noiseDb, snr, clipPct, peakDb, speechRatio,
+    metrics: { vol, noise, clip },
+    overall,
+  };
+}
+
+function median(arr) {
+  const s = [...arr].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+function scoreVolume(db, speechRatio) {
+  if (speechRatio < 0.05) {
+    return { score: 0, label: "声が検出できません", value: db, unit: "dBFS",
+      advice: "発話がほとんど検出されませんでした。マイクに近づくか、ミュート解除を確認してください。" };
+  }
+  let score;
+  // 理想プラトー -22〜-12 dBFS
+  if (db >= -22 && db <= -12) score = 100;
+  else if (db < -22) score = clamp((db - (-40)) / ((-22) - (-40)) * 100, 0, 100);
+  else score = clamp(100 - (db - (-12)) / ((-3) - (-12)) * 100, 0, 100);
+  let advice;
+  if (db < -30) advice = "声が小さめです。マイクに近づくか入力ゲインを上げましょう。";
+  else if (db < -22) advice = "やや小さめ。あと少し声量を上げると聞き取りやすくなります。";
+  else if (db <= -12) advice = "適切な音量です。";
+  else if (db <= -6) advice = "やや大きめ。入力ゲインを少し下げると安定します。";
+  else advice = "音量が大きすぎ、音割れの原因になります。ゲインを下げてください。";
+  return { score: Math.round(score), label: scoreLabel(score), value: db, unit: "dBFS", advice };
+}
+
+function scoreSNR(snr) {
+  const score = clamp((snr - 10) / (35 - 10) * 100, 0, 100);
+  let advice;
+  if (snr >= 30) advice = "とてもクリアです。背景ノイズはほぼ気になりません。";
+  else if (snr >= 20) advice = "良好。多くの環境で問題なく聞き取れます。";
+  else if (snr >= 12) advice = "背景ノイズがやや乗っています。静かな場所やノイズ抑制を検討しましょう。";
+  else advice = "ノイズが大きく聞き取りづらい状態です。環境音を減らすか指向性マイクを検討してください。";
+  return { score: Math.round(score), label: scoreLabel(score), value: snr, unit: "dB SNR", advice };
+}
+
+function scoreClip(clipPct, peakDb) {
+  // 0.5% で 0点。0%付近は満点。
+  let score = clamp(100 - (clipPct / 0.5) * 100, 0, 100);
+  // ピークが -1dBFS 以上に張り付くとクリップ寸前
+  if (clipPct < 0.01 && peakDb > -1) score = Math.min(score, 80);
+  let advice;
+  if (clipPct >= 0.2) advice = "明確な音割れ（クリッピング）が発生しています。入力ゲインを大きく下げてください。";
+  else if (clipPct >= 0.02) advice = "ときどき音割れしています。声を張ったときに歪まないようゲインを下げましょう。";
+  else if (peakDb > -1) advice = "歪んではいませんが、ピークが上限ぎりぎりです。少し余裕(ヘッドルーム)を持たせると安全です。";
+  else advice = "音割れは検出されませんでした。";
+  return { score: Math.round(score), label: scoreLabel(score), value: clipPct, unit: "% clip", advice };
+}
+
+function scoreLabel(s) {
+  if (s >= 85) return "優秀";
+  if (s >= 70) return "良好";
+  if (s >= 50) return "やや注意";
+  return "要改善";
+}
+function scoreColor(s) {
+  if (s >= 85) return "var(--good)";
+  if (s >= 70) return "#a3e635";
+  if (s >= 50) return "var(--warn)";
+  return "var(--bad)";
+}
+
+/* ====================== 結果描画 ====================== */
+function renderResult(a) {
+  $("ovScore").textContent = a.overall;
+  $("ovScore").style.color = scoreColor(a.overall);
+  $("ovLabel").textContent = " ・ " + scoreLabel(a.overall);
+
+  const defs = [
+    { key: "vol",   name: "音量レベル",      fmt: v => v.toFixed(1) },
+    { key: "noise", name: "ノイズ (SNR)",    fmt: v => v.toFixed(1) },
+    { key: "clip",  name: "音割れ",          fmt: v => v.toFixed(3) },
+  ];
+  $("scoreCards").innerHTML = defs.map(d => {
+    const m = a.metrics[d.key];
+    const col = scoreColor(m.score);
+    return `<div class="scard">
+      <div class="top">
+        <span class="name">${d.name}</span>
+        <span class="val" style="color:${col}">${m.score}</span>
+      </div>
+      <div class="bar"><div style="width:${m.score}%;background:${col}"></div></div>
+      <div class="unit">${d.fmt(m.value)} ${m.unit} ・ <b style="color:${col}">${m.label}</b></div>
+      <div class="advice">${m.advice}</div>
+    </div>`;
+  }).join("");
+}
+
+function drawWave(samples) {
+  const cv = $("wave");
+  const ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height, mid = H / 2;
+  ctx.clearRect(0, 0, W, H);
+  ctx.strokeStyle = "#34415c";
+  ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(W, mid); ctx.stroke();
+  ctx.strokeStyle = "var(--accent)";
+  ctx.fillStyle = "rgba(79,157,255,.35)";
+  const step = Math.ceil(samples.length / W);
+  ctx.beginPath();
+  for (let x = 0; x < W; x++) {
+    let min = 1, max = -1;
+    for (let i = 0; i < step; i++) {
+      const s = samples[x * step + i] || 0;
+      if (s < min) min = s; if (s > max) max = s;
+    }
+    ctx.moveTo(x, mid - max * mid);
+    ctx.lineTo(x, mid - min * mid);
+  }
+  ctx.stroke();
+}
+
+/* ====================== 再生 ====================== */
+$("playBtn").addEventListener("click", () => {
+  if (!recordedBuffer) return;
+  if (playSource) { try { playSource.stop(); } catch (e) {} playSource = null; $("playBtn").textContent = "▶ 再生"; return; }
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = ctx.createBuffer(1, recordedBuffer.samples.length, recordedBuffer.sampleRate);
+  buf.copyToChannel(recordedBuffer.samples, 0);
+  playSource = ctx.createBufferSource();
+  playSource.buffer = buf;
+  playSource.connect(ctx.destination);
+  playSource.onended = () => { playSource = null; $("playBtn").textContent = "▶ 再生"; ctx.close(); };
+  playSource.start();
+  $("playBtn").textContent = "■ 停止";
+});
+
+/* ====================== WAV ダウンロード ====================== */
+function prepareDownload(samples, sr) {
+  const wav = encodeWav(samples, sr);
+  const url = URL.createObjectURL(new Blob([wav], { type: "audio/wav" }));
+  const link = $("dlLink");
+  if (link.dataset.url) URL.revokeObjectURL(link.dataset.url);
+  link.href = url;
+  link.dataset.url = url;
+}
+function encodeWav(samples, sr) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buf);
+  const ws = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
+  ws(0, "RIFF"); view.setUint32(4, 36 + samples.length * 2, true); ws(8, "WAVE");
+  ws(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, sr, true); view.setUint32(28, sr * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  ws(36, "data"); view.setUint32(40, samples.length * 2, true);
+  let off = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    off += 2;
+  }
+  return buf;
+}
+
+/* ====================== 履歴 ====================== */
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch (e) { return []; }
+}
+function saveHistory(list) { localStorage.setItem(STORE_KEY, JSON.stringify(list)); }
+
+$("saveBtn").addEventListener("click", () => {
+  if (!lastAnalysis) return;
+  const list = loadHistory();
+  list.unshift({
+    ts: lastAnalysis.ts,
+    device: $("device").value.trim() || "(未入力)",
+    mic: $("mic").value.trim() || "(未入力)",
+    overall: lastAnalysis.overall,
+    vol: lastAnalysis.metrics.vol.score,
+    noise: lastAnalysis.metrics.noise.score,
+    clip: lastAnalysis.metrics.clip.score,
+  });
+  saveHistory(list.slice(0, 200));
+  $("saveMsg").textContent = "✅ 保存しました";
+  renderHistory(); renderRanking();
+});
+
+function fmtDate(ts) {
+  const d = new Date(ts);
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function badge(s) {
+  return `<span class="pill" style="background:${scoreColor(s)};color:#0d1320">${s}</span>`;
+}
+
+function renderHistory() {
+  const list = loadHistory();
+  if (!list.length) { $("histView").innerHTML = `<p class="empty">まだ履歴がありません。録音して「履歴に保存」すると蓄積されます。</p>`; return; }
+  $("histView").innerHTML = `<table>
+    <thead><tr><th>日時</th><th>端末 / マイク</th><th class="num">総合</th><th class="num">音量</th><th class="num">ノイズ</th><th class="num">音割れ</th><th></th></tr></thead>
+    <tbody>${list.map((r, i) => `<tr>
+      <td>${fmtDate(r.ts)}</td>
+      <td>${esc(r.device)}<br><span style="color:var(--muted)">${esc(r.mic)}</span></td>
+      <td class="num">${badge(r.overall)}</td>
+      <td class="num">${r.vol}</td><td class="num">${r.noise}</td><td class="num">${r.clip}</td>
+      <td class="num"><button class="btn-ghost" style="padding:3px 9px;font-size:.78rem" data-del="${i}">削除</button></td>
+    </tr>`).join("")}</tbody></table>`;
+  $("histView").querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => {
+    const list = loadHistory(); list.splice(+b.dataset.del, 1); saveHistory(list); renderHistory(); renderRanking();
+  }));
+}
+
+function renderRanking() {
+  const list = loadHistory();
+  if (!list.length) { $("rankView").innerHTML = `<p class="empty">履歴がたまると、端末・マイクの組み合わせごとの平均スコアをランキング表示します。</p>`; return; }
+  const groups = {};
+  list.forEach(r => {
+    const key = r.device + " ／ " + r.mic;
+    (groups[key] ||= []).push(r);
+  });
+  const rows = Object.entries(groups).map(([key, rs]) => ({
+    key,
+    n: rs.length,
+    overall: avg(rs.map(r => r.overall)),
+    vol: avg(rs.map(r => r.vol)),
+    noise: avg(rs.map(r => r.noise)),
+    clip: avg(rs.map(r => r.clip)),
+  })).sort((a, b) => b.overall - a.overall);
+  $("rankView").innerHTML = `<p class="hint" style="margin-top:0">この端末に保存された自分のデータ内での平均ランキングです。（将来：全ユーザー統計に拡張予定）</p>
+  <table><thead><tr><th>#</th><th>端末 ／ マイク</th><th class="num">回数</th><th class="num">総合(平均)</th><th class="num">音量</th><th class="num">ノイズ</th><th class="num">音割れ</th></tr></thead>
+  <tbody>${rows.map((r, i) => `<tr>
+    <td>${i+1}</td><td>${esc(r.key)}</td><td class="num">${r.n}</td>
+    <td class="num">${badge(r.overall)}</td><td class="num">${r.vol}</td><td class="num">${r.noise}</td><td class="num">${r.clip}</td>
+  </tr>`).join("")}</tbody></table>`;
+}
+const avg = arr => Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
+const esc = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+/* タブ切替 */
+$("tabHist").addEventListener("click", () => { $("tabHist").classList.add("active"); $("tabRank").classList.remove("active"); $("histView").classList.remove("hidden"); $("rankView").classList.add("hidden"); });
+$("tabRank").addEventListener("click", () => { $("tabRank").classList.add("active"); $("tabHist").classList.remove("active"); $("rankView").classList.remove("hidden"); $("histView").classList.add("hidden"); renderRanking(); });
+
+/* ====================== 共通 ====================== */
+function showError(msg) {
+  const b = $("errBox");
+  if (!msg) { b.classList.add("hidden"); b.textContent = ""; return; }
+  b.classList.remove("hidden"); b.textContent = msg;
+}
+
+renderHistory();
+renderRanking();
+</script>
+</body>
+</html>
