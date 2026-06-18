@@ -141,10 +141,15 @@
   <div class="panel hidden" id="resultPanel">
     <h2>2. 再生と診断結果</h2>
     <div class="row" style="margin-bottom:14px;">
-      <button id="playBtn" class="btn-primary">▶ 再生</button>
+      <button id="playBtn" class="btn-primary">▶ 元の音量で再生</button>
+      <button id="playNormBtn" class="btn-ghost">🔊 目標音量に補正して再生</button>
       <a class="dl" id="dlLink" href="#" download="my-voice.wav">⬇ WAVをダウンロード</a>
     </div>
+    <p class="hint" id="playHint" style="margin-top:0">「元の音量」と「補正後」を聞き比べると、目標レベルまでどれだけ持ち上げが必要かが体感できます。</p>
     <canvas id="wave" width="840" height="90"></canvas>
+
+    <!-- dBFS スケール上での自分の位置（比較ビジュアル） -->
+    <div id="volScale"></div>
 
     <div class="overall" style="margin-top:18px;">
       <div class="big" id="ovScore">--</div>
@@ -297,28 +302,39 @@ function stopRecording() {
 function analyze(samples, sr) {
   const frameLen = Math.floor(sr * 0.02);   // 20ms フレーム
   const nFrames = Math.floor(samples.length / frameLen);
-  const frameDb = [];
+  const frameDb = [];                         // 各フレームの dBFS
+  const framePow = [];                        // 各フレームの平均パワー(線形)
   for (let f = 0; f < nFrames; f++) {
     let sum = 0;
     const start = f * frameLen;
     for (let i = 0; i < frameLen; i++) { const s = samples[start + i]; sum += s * s; }
-    const rms = Math.sqrt(sum / frameLen);
-    frameDb.push(20 * Math.log10(rms + 1e-9));
+    const pow = sum / frameLen;
+    framePow.push(pow);
+    frameDb.push(10 * Math.log10(pow + 1e-12));   // 10*log10(power) = 20*log10(rms)
   }
   const sorted = [...frameDb].sort((a, b) => a - b);
   const pct = p => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))))];
 
-  // ノイズフロア = 下位10%、発話レベル = 上位帯の中央付近
+  // ノイズフロア = 下位10%
   const noiseDb = pct(0.10);
   const loudDb = pct(0.95);
   // 発話フレーム = ノイズフロア+8dB を超えるフレーム
   const speechThresh = noiseDb + 8;
-  const speechFrames = frameDb.filter(d => d > speechThresh);
-  const speechRatio = speechFrames.length / Math.max(1, nFrames);
-  const voicedDb = speechFrames.length
-    ? median(speechFrames)
-    : loudDb;
-  const snr = voicedDb - noiseDb;
+  const voicedIdx = [];
+  for (let f = 0; f < nFrames; f++) if (frameDb[f] > speechThresh) voicedIdx.push(f);
+  const speechRatio = voicedIdx.length / Math.max(1, nFrames);
+  // アクティブ発話レベル = 発話フレームの「エネルギー平均」。
+  // 中央値だと弱い子音・語尾に引っ張られ体感より低く出るため、線形パワーで平均して dB 化する。
+  let activeDb;
+  if (voicedIdx.length) {
+    let ps = 0;
+    for (const f of voicedIdx) ps += framePow[f];
+    activeDb = 10 * Math.log10(ps / voicedIdx.length + 1e-12);
+  } else {
+    activeDb = loudDb;
+  }
+  const voicedDb = activeDb;   // 結果オブジェクト互換のためのエイリアス
+  const snr = activeDb - noiseDb;
 
   // クリッピング: |sample| >= 0.985 の割合
   let clipped = 0, peak = 0;
@@ -351,21 +367,25 @@ function median(arr) {
 }
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+// 理想のアクティブ発話レベル帯（dBFS）。VoIP/通話の目安に合わせる。
+const VOL_IDEAL_LO = -27, VOL_IDEAL_HI = -16;   // この間は満点
+const VOL_FLOOR = -44;                           // これ以下は 0 点（小さすぎ）
+const VOL_CEIL = -6;                             // これ以上は 0 点（大きすぎ）
+const VOL_TARGET = -20;                          // 補正再生のターゲット
 function scoreVolume(db, speechRatio) {
   if (speechRatio < 0.05) {
     return { score: 0, label: "声が検出できません", value: db, unit: "dBFS",
       advice: "発話がほとんど検出されませんでした。マイクに近づくか、ミュート解除を確認してください。" };
   }
   let score;
-  // 理想プラトー -22〜-12 dBFS
-  if (db >= -22 && db <= -12) score = 100;
-  else if (db < -22) score = clamp((db - (-40)) / ((-22) - (-40)) * 100, 0, 100);
-  else score = clamp(100 - (db - (-12)) / ((-3) - (-12)) * 100, 0, 100);
+  if (db >= VOL_IDEAL_LO && db <= VOL_IDEAL_HI) score = 100;
+  else if (db < VOL_IDEAL_LO) score = clamp((db - VOL_FLOOR) / (VOL_IDEAL_LO - VOL_FLOOR) * 100, 0, 100);
+  else score = clamp((VOL_CEIL - db) / (VOL_CEIL - VOL_IDEAL_HI) * 100, 0, 100);
   let advice;
-  if (db < -30) advice = "声が小さめです。マイクに近づくか入力ゲインを上げましょう。";
-  else if (db < -22) advice = "やや小さめ。あと少し声量を上げると聞き取りやすくなります。";
-  else if (db <= -12) advice = "適切な音量です。";
-  else if (db <= -6) advice = "やや大きめ。入力ゲインを少し下げると安定します。";
+  if (db < -38) advice = "声が小さめです。マイクに近づくか入力ゲインを上げましょう（会議アプリのAGCが有効なら自動で持ち上がる場合もあります）。";
+  else if (db < VOL_IDEAL_LO) advice = "やや小さめ。あと少し声量を上げる/マイクを近づけると聞き取りやすくなります。";
+  else if (db <= VOL_IDEAL_HI) advice = "適切な音量です。";
+  else if (db <= -10) advice = "やや大きめ。入力ゲインを少し下げると安定します。";
   else advice = "音量が大きすぎ、音割れの原因になります。ゲインを下げてください。";
   return { score: Math.round(score), label: scoreLabel(score), value: db, unit: "dBFS", advice };
 }
@@ -430,6 +450,41 @@ function renderResult(a) {
       <div class="advice">${m.advice}</div>
     </div>`;
   }).join("");
+  renderVolScale(a);
+}
+
+// dBFS スケール上に「自分の平均レベル / ピーク / ノイズ」を置いて、適切帯と比較表示する
+function renderVolScale(a) {
+  const LO = -60, HI = 0;
+  const pos = db => clamp((db - LO) / (HI - LO) * 100, 0, 100);
+  const gLo = pos(VOL_IDEAL_LO), gHi = pos(VOL_IDEAL_HI), hot = pos(-6);
+  const grad = `linear-gradient(90deg,`
+    + `#2b3447 0%, #2b3447 ${gLo}%,`
+    + `rgba(52,211,153,.55) ${gLo}%, rgba(52,211,153,.55) ${gHi}%,`
+    + `rgba(251,191,36,.55) ${gHi}%, rgba(251,191,36,.55) ${hot}%,`
+    + `rgba(248,113,113,.6) ${hot}%, rgba(248,113,113,.6) 100%)`;
+  const ticks = [-60, -48, -36, -24, -12, 0];
+  const active = a.voicedDb, peak = a.peakDb, noise = a.noiseDb;
+  $("volScale").innerHTML = `
+    <div style="margin-top:18px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+        <strong style="font-size:.9rem">音量レベルの位置（dBFSスケール）</strong>
+        <span style="font-size:.78rem;color:var(--muted)">緑＝適切 / 黄＝大きめ / 赤＝過大・クリップ域</span>
+      </div>
+      <div style="position:relative;height:26px;border-radius:6px;background:${grad}">
+        <div title="あなたの平均 ${active.toFixed(1)} dBFS" style="position:absolute;left:${pos(active)}%;top:-3px;bottom:-3px;width:3px;background:#fff;transform:translateX(-50%);box-shadow:0 0 0 1px #000a"></div>
+        <div title="ピーク ${peak.toFixed(1)} dBFS" style="position:absolute;left:${pos(peak)}%;top:0;bottom:0;width:0;border-left:2px solid #000a;transform:translateX(-50%)"></div>
+        <div title="ノイズフロア ${noise.toFixed(1)} dBFS" style="position:absolute;left:${pos(noise)}%;top:0;bottom:0;width:0;border-left:2px dotted #ffffff88;transform:translateX(-50%)"></div>
+      </div>
+      <div style="position:relative;height:14px;font-size:.7rem;color:var(--muted);margin-top:2px">
+        ${ticks.map(t => `<span style="position:absolute;left:${pos(t)}%;transform:translateX(-50%)">${t}</span>`).join("")}
+      </div>
+      <div style="font-size:.8rem;margin-top:8px;line-height:1.8">
+        <span style="display:inline-block;width:11px;height:11px;background:#fff;border:1px solid #000a;vertical-align:-1px;margin-right:3px"></span>あなたの平均 <b>${active.toFixed(1)}</b> dBFS
+        <span style="color:var(--muted)">┃ ピーク ${peak.toFixed(1)}　⋮ ノイズ ${noise.toFixed(1)}</span><br>
+        <span style="color:var(--muted)">適切帯 ${VOL_IDEAL_LO}〜${VOL_IDEAL_HI} dBFS／目標 ${VOL_TARGET} dBFS（補正再生のターゲット）</span>
+      </div>
+    </div>`;
 }
 
 function drawWave(samples) {
@@ -453,21 +508,54 @@ function drawWave(samples) {
     ctx.lineTo(x, mid - min * mid);
   }
   ctx.stroke();
+
+  // ガイド線: 目標RMS(緑) と クリップ閾値(赤) を波形に重ねる
+  const guide = (amp, color, dash, label) => {
+    ctx.save();
+    ctx.strokeStyle = color; ctx.setLineDash(dash);
+    ctx.beginPath();
+    ctx.moveTo(0, mid - amp * mid); ctx.lineTo(W, mid - amp * mid);
+    ctx.moveTo(0, mid + amp * mid); ctx.lineTo(W, mid + amp * mid);
+    ctx.stroke();
+    ctx.setLineDash([]); ctx.fillStyle = color; ctx.font = "10px sans-serif";
+    ctx.fillText(label, 4, Math.max(9, mid - amp * mid - 2));
+    ctx.restore();
+  };
+  guide(0.985, "rgba(248,113,113,.7)", [4, 3], "クリップ");
+  guide(Math.pow(10, VOL_TARGET / 20), "rgba(52,211,153,.8)", [5, 4], "目標RMS");
 }
 
 /* ====================== 再生 ====================== */
-$("playBtn").addEventListener("click", () => {
+let playCtx = null;
+function startPlayback(gain, btn) {
   if (!recordedBuffer) return;
-  if (playSource) { try { playSource.stop(); } catch (e) {} playSource = null; $("playBtn").textContent = "▶ 再生"; return; }
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const buf = ctx.createBuffer(1, recordedBuffer.samples.length, recordedBuffer.sampleRate);
+  if (playSource) { try { playSource.stop(); } catch (e) {} return; }  // 再生中なら停止のみ
+  playCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = playCtx.createBuffer(1, recordedBuffer.samples.length, recordedBuffer.sampleRate);
   buf.copyToChannel(recordedBuffer.samples, 0);
-  playSource = ctx.createBufferSource();
-  playSource.buffer = buf;
-  playSource.connect(ctx.destination);
-  playSource.onended = () => { playSource = null; $("playBtn").textContent = "▶ 再生"; ctx.close(); };
-  playSource.start();
-  $("playBtn").textContent = "■ 停止";
+  const src = playCtx.createBufferSource();
+  src.buffer = buf;
+  const g = playCtx.createGain();
+  g.gain.value = gain;
+  src.connect(g); g.connect(playCtx.destination);
+  btn.dataset.orig = btn.textContent;
+  src.onended = () => {
+    playSource = null;
+    btn.textContent = btn.dataset.orig;
+    if (playCtx) { playCtx.close(); playCtx = null; }
+  };
+  playSource = src;
+  src.start();
+  btn.textContent = "■ 停止";
+}
+$("playBtn").addEventListener("click", () => startPlayback(1, $("playBtn")));
+$("playNormBtn").addEventListener("click", () => {
+  if (!lastAnalysis) return;
+  // 目標レベルへ持ち上げるゲイン。ただしピークが 0.99 を超えない範囲に制限。
+  const gain = Math.pow(10, (VOL_TARGET - lastAnalysis.voicedDb) / 20);
+  const peakLin = Math.pow(10, lastAnalysis.peakDb / 20);
+  const finalGain = Math.min(gain, 0.99 / Math.max(peakLin, 1e-6));
+  startPlayback(finalGain, $("playNormBtn"));
 });
 
 /* ====================== WAV ダウンロード ====================== */
