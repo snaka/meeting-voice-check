@@ -91,7 +91,7 @@
   .hint { font-size: 0.82rem; color: var(--muted); margin-top: 10px; }
   .toggles { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 14px; }
   .toggles label { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 0.85rem; cursor: pointer; }
-  canvas#wave { width: 100%; height: 120px; display: block; background: #0d1422; border-radius: 8px; }
+  canvas#wave, canvas#waveRef { width: 100%; height: 120px; display: block; background: #0d1422; border-radius: 8px; }
   .waveLabel { font-size: 0.82rem; color: var(--muted); margin: 12px 0 4px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .waveLabel b { color: var(--text); }
   .info { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; border-radius: 50%; border: 1px solid var(--muted); color: var(--muted); font-size: 11px; line-height: 1; cursor: help; position: relative; vertical-align: middle; font-weight: 700; }
@@ -214,7 +214,9 @@
       <div>
         <div class="waveLabel"><b>🎙️ あなたの声</b><span style="color:var(--muted)">緑＝目標RMS／赤＝クリップ閾値</span></div>
         <canvas id="wave" width="1680" height="240"></canvas>
-        <p class="hint" style="margin-top:6px">緑の「目標RMS」線に波形が届いているか確認しましょう（届いていなければ声が小さめです）。</p>
+        <div class="waveLabel" style="margin-top:12px"><b>⭐ お手本（『吾輩は猫である』）</b><span style="color:var(--muted)">適切な音量・クリア・音割れなし</span></div>
+        <canvas id="waveRef" width="1680" height="240"></canvas>
+        <p class="hint" style="margin-top:6px">お手本と同じ縦スケールで表示しています。あなたの波形が緑「目標RMS」線に届いているか、お手本と見比べてみてください。</p>
         <div id="volScale" style="margin-top:14px"></div>
       </div>
     </details>
@@ -419,6 +421,7 @@ function stopRecording() {
   lastAnalysis = analyze(samples, recSampleRate);
   renderResult(lastAnalysis);
   drawWave(samples);
+  loadReference().then(rb => { if (rb) drawWaveform($("waveRef"), rb.samples); });
   prepareDownload(samples, recSampleRate);
   drawSticker(lastAnalysis);
   stickerBlob = null;            // 内容が変わったので作り直し
@@ -784,29 +787,37 @@ function drawWaveform(cv, samples) {
   guide(Math.pow(10, VOL_TARGET / 20), "rgba(52,211,153,.95)", [10, 8], "目標RMS");
 }
 
-/* ====================== お手本（日本語の読み上げ）====================== */
-// 夏目漱石『吾輩は猫である』の冒頭。明瞭な日本語の発話サンプルとして読み上げる。
-const REF_TEXT = "吾輩は猫である。名前はまだ無い。どこで生れたか頓と見当がつかぬ。";
-// 一部環境は getVoices() が非同期で埋まるため、先に呼んでおく
-if (window.speechSynthesis) { try { window.speechSynthesis.getVoices(); } catch (e) {} }
-function speakReference(btn) {
-  const synth = window.speechSynthesis;
-  const reset = () => { btn.textContent = btn.dataset.orig || "📢 お手本（日本語）を再生"; };
-  if (!synth || typeof SpeechSynthesisUtterance === "undefined") {
-    $("playHint").textContent = "このブラウザは音声合成に未対応のため、お手本の読み上げを再生できません。";
-    return;
-  }
-  if (synth.speaking || synth.pending) { synth.cancel(); reset(); return; }  // トグルで停止
-  const u = new SpeechSynthesisUtterance(REF_TEXT);
-  u.lang = "ja-JP"; u.rate = 1.0; u.pitch = 1.0;
-  const ja = (synth.getVoices() || []).find(v => (v.lang || "").toLowerCase().startsWith("ja"));
-  if (ja) u.voice = ja;
-  u.onend = reset;
-  u.onerror = () => { reset(); $("playHint").textContent = "お手本の読み上げに失敗しました（日本語の音声が見つからない可能性）。"; };
-  btn.dataset.orig = btn.textContent;
-  btn.textContent = "■ 停止";
-  synth.speak(u);
+/* ====================== お手本（日本語の音声ファイル）====================== */
+// 夏目漱石『吾輩は猫である』の冒頭を読み上げた音声（say -v Kyoko で生成）。
+// fetch → decodeAudioData でサンプル化し、波形表示・再生・音量基準に使う。
+const REF_URL = "ref-voice.mp3";
+let refBuf = null, refLoading = null;
+function loadReference() {
+  if (refBuf) return Promise.resolve(refBuf);
+  if (refLoading) return refLoading;
+  refLoading = fetch(REF_URL)
+    .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.arrayBuffer(); })
+    .then(ab => {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      return ctx.decodeAudioData(ab).then(buf => { try { ctx.close(); } catch (e) {} return buf; });
+    })
+    .then(audioBuf => {
+      const ch = audioBuf.getChannelData(0);
+      const s = new Float32Array(ch.length); s.set(ch);
+      // 目標(-20dBFS)へ正規化＝音量の見本になるように（ピークはクリップ手前に制限）
+      let sum = 0, cnt = 0, peak = 0;
+      for (let i = 0; i < s.length; i++) { const a = Math.abs(s[i]); if (a > peak) peak = a; if (a > 0.02) { sum += s[i] * s[i]; cnt++; } }
+      const rms = Math.sqrt(sum / Math.max(1, cnt));
+      let gain = Math.pow(10, VOL_TARGET / 20) / Math.max(rms, 1e-6);
+      gain = Math.min(gain, 0.95 / Math.max(peak, 1e-6));
+      for (let i = 0; i < s.length; i++) s[i] *= gain;
+      refBuf = { samples: s, sampleRate: audioBuf.sampleRate };
+      return refBuf;
+    })
+    .catch(() => { refLoading = null; return null; });
+  return refLoading;
 }
+loadReference();   // 先読みしておく（結果表示時に波形をすぐ描けるように）
 
 /* ====================== 再生 ====================== */
 let playCtx = null;
@@ -843,7 +854,13 @@ $("playNormBtn").addEventListener("click", () => {
   const finalGain = Math.min(gain, 0.99 / Math.max(peakLin, 1e-6));
   startPlayback(finalGain, $("playNormBtn"));
 });
-$("playRefBtn").addEventListener("click", () => speakReference($("playRefBtn")));
+$("playRefBtn").addEventListener("click", async () => {
+  if (playSource) { try { playSource.stop(); } catch (e) {} return; }   // 再生中なら停止
+  const btn = $("playRefBtn");
+  const rb = await loadReference();
+  if (!rb) { $("playHint").textContent = "お手本音声の読み込みに失敗しました。ページを再読み込みしてみてください。"; return; }
+  playPCM(rb.samples, rb.sampleRate, 1, btn);
+});
 
 /* ====================== フィードバック（エコー）テスト ====================== */
 const PROBE_FREQS = [940, 1560];   // テスト音の搬送波（測定対象の周波数）
