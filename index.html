@@ -108,7 +108,7 @@
 <div class="wrap">
   <header>
     <h1>🎙️ 声チェッカー</h1>
-    <p>オンライン会議で自分の声が相手にどう聞こえているかを録音・再生し、音量／ノイズ／音割れの3軸で定量診断します。データはすべてこの端末内（ブラウザ）にのみ保存され、外部へ送信されません。</p>
+    <p>オンライン会議で自分の声が相手にどう聞こえているかを録音・再生し、音量／ノイズ／明瞭度／安定性／音割れの5軸で定量診断します。マイクのフィードバック（エコー）チェックも可能。データはすべてこの端末内（ブラウザ）にのみ保存され、外部へ送信されません。</p>
   </header>
 
   <div id="errBox" class="err hidden"></div>
@@ -116,6 +116,11 @@
   <!-- 録音パネル -->
   <div class="panel">
     <h2>1. 録音</h2>
+    <div style="margin-bottom:14px;">
+      <label>テストするマイク（入力デバイス）</label>
+      <select id="micSelect"></select>
+      <p class="hint" id="micHint" style="margin:4px 0 0">複数のマイクがある場合はここで選べます。マイク名は許可後に表示されます。録音・フィードバックテストの両方に適用されます。</p>
+    </div>
     <div class="grid2" style="margin-bottom:14px;">
       <div>
         <label>端末の機種（任意）</label>
@@ -227,6 +232,54 @@ let stickerBlob = null;        // 生成済みステッカーPNG (Blob)
 const $ = id => document.getElementById(id);
 const SHARE_URL = "https://snaka.github.io/meeting-voice-check/";
 
+/* ====================== マイク（入力デバイス）選択 ====================== */
+// 選択中のマイク deviceId（"" = 自動/システム既定）
+function selectedMicId() {
+  const sel = $("micSelect");
+  return sel && sel.value && sel.value !== "" ? sel.value : null;
+}
+// getUserMedia の audio 制約を組み立て（選択マイク + 音声処理フラグ）
+function micConstraints(proc) {
+  const c = { echoCancellation: proc.ec, noiseSuppression: proc.ns, autoGainControl: proc.agc };
+  const id = selectedMicId();
+  if (id) c.deviceId = { exact: id };
+  return c;
+}
+// 入力デバイス一覧をセレクトに反映（許可前はラベルが空のことがある）
+async function populateMics() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  let devices;
+  try { devices = await navigator.mediaDevices.enumerateDevices(); } catch (e) { return; }
+  const mics = devices.filter(d => d.kind === "audioinput");
+  const sel = $("micSelect");
+  const prev = sel.value;
+  sel.innerHTML = "";
+  const auto = document.createElement("option");
+  auto.value = ""; auto.textContent = "自動（システム既定）";
+  sel.appendChild(auto);
+  let labelled = false;
+  mics.forEach((d, i) => {
+    const o = document.createElement("option");
+    o.value = d.deviceId;
+    o.textContent = d.label || `マイク ${i + 1}`;
+    if (d.label) labelled = true;
+    sel.appendChild(o);
+  });
+  if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+  $("micHint").textContent = labelled
+    ? "複数のマイクがある場合はここで選べます。録音・フィードバックテストの両方に適用されます。"
+    : "複数のマイクがある場合はここで選べます。マイク名は録音/テストを一度実行して許可すると表示されます。";
+}
+populateMics();
+if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener("devicechange", populateMics);
+}
+// 実デバイス名が分かれば「マイクの機種」欄が空のとき補完（共有テキスト用）
+$("micSelect").addEventListener("change", () => {
+  const sel = $("micSelect"), label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : "";
+  if (sel.value && label && !$("mic").value.trim() && !/^マイク \d+$/.test(label)) $("mic").value = label;
+});
+
 /* ====================== 録音 ====================== */
 $("recBtn").addEventListener("click", async () => {
   if (!recording) await startRecording();
@@ -241,17 +294,14 @@ async function startRecording() {
   }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: $("tEcho").checked,
-        noiseSuppression: $("tNoise").checked,
-        autoGainControl: $("tAgc").checked,
-      },
+      audio: micConstraints({ ec: $("tEcho").checked, ns: $("tNoise").checked, agc: $("tAgc").checked }),
       video: false,
     });
   } catch (e) {
     showError("マイクへのアクセスが許可されませんでした（" + e.name + "）。ブラウザのアドレスバーのマイク許可をご確認ください。");
     return;
   }
+  populateMics();   // 許可後はラベルが取得できるので一覧を更新
 
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   recSampleRate = audioCtx.sampleRate;
@@ -814,12 +864,13 @@ async function runFeedbackTest() {
   try {
     // エコーキャンセル等は必ずオフ＝スピーカー→マイクの物理的な回り込みを測る
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false,
+      audio: micConstraints({ ec: false, ns: false, agc: false }), video: false,
     });
   } catch (e) {
     $("fbStatus").textContent = "マイクの許可が必要です（" + e.name + "）。";
     $("fbBtn").disabled = false; fbRunning = false; return;
   }
+  populateMics();
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   if (ctx.state === "suspended") { try { await ctx.resume(); } catch (e) {} }
   const sr = ctx.sampleRate;
