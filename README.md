@@ -35,12 +35,12 @@ python3 -m http.server
 ## 技術構成
 
 - 単一の `index.html`（ビルド不要・依存なし）
-- Web Audio API（getUserMedia / ScriptProcessor / AudioBuffer）
-- データ保存: `localStorage`
+- Web Audio API（getUserMedia / ScriptProcessor / AudioBuffer / FFT）
+- 録音データは外部送信せず、ブラウザのメモリ内のみで処理（永続保存なし）
 
 ## 将来の拡張（現状スコープ外）
 
-「全ユーザーの機種統計を参照」する機能は、ランキング集計部分をバックエンドAPI＋DBに差し替えれば実現できる設計にしています。
+匿名のスコア統計をバックエンド（API＋DB）で集計・比較する機能を追加する余地があります（現状は完全にクライアント完結）。
 
 ## ライセンス
 

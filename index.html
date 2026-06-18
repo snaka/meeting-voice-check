@@ -121,16 +121,6 @@
       <select id="micSelect"></select>
       <p class="hint" id="micHint" style="margin:4px 0 0">複数のマイクがある場合はここで選べます。マイク名は許可後に表示されます。録音・フィードバックテストの両方に適用されます。</p>
     </div>
-    <div class="grid2" style="margin-bottom:14px;">
-      <div>
-        <label>端末の機種（任意）</label>
-        <input type="text" id="device" placeholder="例: MacBook Pro 14 (M3)" />
-      </div>
-      <div>
-        <label>マイクの機種（任意）</label>
-        <input type="text" id="mic" placeholder="例: 内蔵マイク / Yeti Nano" />
-      </div>
-    </div>
 
     <div class="row">
       <button id="recBtn" class="btn-rec">● 録音開始</button>
@@ -274,11 +264,6 @@ populateMics();
 if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
   navigator.mediaDevices.addEventListener("devicechange", populateMics);
 }
-// 実デバイス名が分かれば「マイクの機種」欄が空のとき補完（共有テキスト用）
-$("micSelect").addEventListener("change", () => {
-  const sel = $("micSelect"), label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : "";
-  if (sel.value && label && !$("mic").value.trim() && !/^マイク \d+$/.test(label)) $("mic").value = label;
-});
 
 /* ====================== 録音 ====================== */
 $("recBtn").addEventListener("click", async () => {
@@ -1076,26 +1061,14 @@ function drawSticker(a) {
   stkText(ctx, `音量 ${m.vol.score}　ノイズ ${m.noise.score}　明瞭 ${m.clarity.score}`, W / 2, 892, "bold 42px sans-serif", "#ffffff", 6);
   stkText(ctx, `安定 ${m.stability.score}　音割れ ${m.clip.score}`, W / 2, 940, "bold 42px sans-serif", "#ffffff", 6);
 
-  // 端末・マイク（任意）
-  const dm = deviceMicLabel();
-  if (dm) stkText(ctx, dm, W / 2, 985, "32px sans-serif", "rgba(255,255,255,.92)", 5);
-
   // フッター
-  stkText(ctx, "snaka.github.io/meeting-voice-check", W / 2, 1028, "32px sans-serif", "rgba(255,255,255,.85)", 4);
+  stkText(ctx, "snaka.github.io/meeting-voice-check", W / 2, 1010, "32px sans-serif", "rgba(255,255,255,.85)", 4);
 }
 
-function deviceMicLabel() {
-  const d = ($("device").value || "").trim();
-  const mi = ($("mic").value || "").trim();
-  if (d && mi) return `${d} ／ ${mi}`;
-  return d || mi || "";
-}
 function shareText() {
   const a = lastAnalysis; if (!a) return "";
-  const dm = deviceMicLabel();
   return `🎙️声チェッカー 診断結果\n総合 ${a.overall}点（${scoreLabel(a.overall)}）${faceFor(a.overall)}\n`
     + `音量${a.metrics.vol.score} / ノイズ${a.metrics.noise.score} / 明瞭${a.metrics.clarity.score} / 安定${a.metrics.stability.score} / 音割れ${a.metrics.clip.score}`
-    + (dm ? `\n${dm}` : "")
     + `\n#声チェッカー\n${SHARE_URL}`;
 }
 
