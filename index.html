@@ -374,18 +374,91 @@ function analyze(samples, sr) {
   const clipPct = clipped / samples.length * 100;
   const peakDb = 20 * Math.log10(peak + 1e-9);
 
+  // 明瞭度（こもり）: 発話区間スペクトルの 2-4kHz / 0.3-1kHz バランス
+  const balance = spectralBalance(samples, sr, speechThresh);
+  // 音量の安定性: 0.4秒窓ごとの発話レベルのばらつき
+  const stab = levelStability(framePow, frameDb, voicedIdx, frameLen, sr);
+
   const vol = scoreVolume(voicedDb, speechRatio);
   const noise = scoreSNR(snr);
+  const clarity = scoreClarity(balance, speechRatio);
+  const stability = scoreStability(stab, speechRatio);
   const clip = scoreClip(clipPct, peakDb);
-  const overall = Math.round((vol.score + noise.score + clip.score) / 3);
+  const parts = [vol, noise, clarity, stability, clip];
+  const overall = Math.round(parts.reduce((s, m) => s + m.score, 0) / parts.length);
 
   return {
     ts: Date.now(),
     durationSec: samples.length / sr,
     voicedDb, noiseDb, snr, clipPct, peakDb, speechRatio,
-    metrics: { vol, noise, clip },
+    tiltDb: balance ? balance.tiltDb : null, levelStd: stab ? stab.std : null,
+    metrics: { vol, noise, clarity, stability, clip },
     overall,
   };
+}
+
+/* ====================== 明瞭度（スペクトル解析）====================== */
+// in-place 反復FFT（長さは2のべき乗）
+function fft(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { const tr = re[i]; re[i] = re[j]; re[j] = tr; const ti = im[i]; im[i] = im[j]; im[j] = ti; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = i + k + len / 2;
+        const vr = re[b] * cr - im[b] * ci, vi = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - vr; im[b] = im[a] - vi;
+        re[a] += vr; im[a] += vi;
+        const ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
+      }
+    }
+  }
+}
+// 発話区間の平均スペクトルから 2-4kHz と 0.3-1kHz のバランス(dB)を求める
+function spectralBalance(samples, sr, gateDb) {
+  const F = 2048, hop = 1024;
+  if (samples.length < F) return null;
+  const win = new Float64Array(F);
+  for (let i = 0; i < F; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (F - 1));
+  const re = new Float64Array(F), im = new Float64Array(F), acc = new Float64Array(F / 2);
+  let frames = 0;
+  for (let start = 0; start + F <= samples.length; start += hop) {
+    let s2 = 0; for (let i = 0; i < F; i++) { const v = samples[start + i]; s2 += v * v; }
+    if (10 * Math.log10(s2 / F + 1e-12) < gateDb) continue;   // 無音フレームは除外
+    for (let i = 0; i < F; i++) { re[i] = samples[start + i] * win[i]; im[i] = 0; }
+    fft(re, im);
+    for (let k = 0; k < F / 2; k++) acc[k] += re[k] * re[k] + im[k] * im[k];
+    frames++;
+  }
+  if (frames === 0) return null;
+  const binHz = sr / F;
+  const band = (lo, hi) => { let p = 0; const k0 = Math.max(1, Math.floor(lo / binHz)), k1 = Math.min(F / 2 - 1, Math.ceil(hi / binHz)); for (let k = k0; k <= k1; k++) p += acc[k]; return p; };
+  const body = band(300, 1000), clarity = band(2000, 4000);
+  return { tiltDb: 10 * Math.log10((clarity + 1e-12) / (body + 1e-12)), frames };
+}
+// 0.4秒窓ごとの発話レベルのばらつき(dBの標準偏差)
+function levelStability(framePow, frameDb, voicedIdx, frameLen, sr) {
+  const framesPerWin = Math.max(1, Math.round(0.4 * sr / frameLen));
+  const voiced = new Set(voicedIdx);
+  const levels = [];
+  for (let w = 0; w * framesPerWin < frameDb.length; w++) {
+    let ps = 0, cnt = 0;
+    for (let f = w * framesPerWin; f < (w + 1) * framesPerWin && f < frameDb.length; f++) {
+      if (voiced.has(f)) { ps += framePow[f]; cnt++; }
+    }
+    if (cnt >= Math.max(2, framesPerWin * 0.3)) levels.push(10 * Math.log10(ps / cnt + 1e-12));
+  }
+  if (levels.length < 2) return null;
+  const mean = levels.reduce((a, b) => a + b, 0) / levels.length;
+  const variance = levels.reduce((a, b) => a + (b - mean) * (b - mean), 0) / levels.length;
+  return { std: Math.sqrt(variance), windows: levels.length };
 }
 
 function median(arr) {
@@ -448,6 +521,39 @@ function scoreClip(clipPct, peakDb) {
   return { score: Math.round(score), label: scoreLabel(score), value: clipPct, unit: "% clip", advice };
 }
 
+// 明瞭度: 2-4kHz(子音帯) と 0.3-1kHz(声の芯) のバランス(dB)。負に大きい=こもり、大きい=シャリつき。
+const CLR_LO = -19, CLR_HI = -3, CLR_FLOOR = -31, CLR_CEIL = 7;
+function scoreClarity(info, speechRatio) {
+  if (!info || speechRatio < 0.05) {
+    return { score: 0, label: "判定不可", value: 0, unit: "dB", advice: "発話が短く明瞭度を測れませんでした。もう少し長めに話してください。" };
+  }
+  const t = info.tiltDb;
+  let score;
+  if (t >= CLR_LO && t <= CLR_HI) score = 100;
+  else if (t < CLR_LO) score = clamp((t - CLR_FLOOR) / (CLR_LO - CLR_FLOOR) * 100, 0, 100);
+  else score = clamp((CLR_CEIL - t) / (CLR_CEIL - CLR_HI) * 100, 0, 100);
+  let advice;
+  if (t < -25) advice = "声がこもり気味です。マイクを口元に近づける／口の前の遮蔽物を外す／高域を上げると明瞭になります。";
+  else if (t < CLR_LO) advice = "ややこもり気味。子音(高域)がもう少しあると聞き取りやすくなります。";
+  else if (t <= CLR_HI) advice = "明瞭でバランスの良い音です。";
+  else advice = "高域が強め（シャリつき・歯擦音が目立つ傾向）。気になる場合は高域を少し抑えましょう。";
+  return { score: Math.round(score), label: scoreLabel(score), value: t, unit: "dB(2-4k/中域)", advice };
+}
+
+// 音量の安定性: 0.4秒窓ごとの発話レベルの標準偏差(dB)。小さいほど安定。
+function scoreStability(info, speechRatio) {
+  if (!info || speechRatio < 0.05) {
+    return { score: 0, label: "判定不可", value: 0, unit: "dB", advice: "発話が短く安定性を測れませんでした。もう少し長めに話してください。" };
+  }
+  const sd = info.std;
+  const score = clamp((12 - sd) / (12 - 3) * 100, 0, 100);
+  let advice;
+  if (sd <= 3) advice = "音量が安定しています。";
+  else if (sd <= 6) advice = "やや変動あり。マイクとの距離を一定に保つと安定します。";
+  else advice = "音量の変動が大きいです。マイク距離が動いている可能性。位置を固定しましょう。";
+  return { score: Math.round(score), label: scoreLabel(score), value: sd, unit: "dB σ", advice };
+}
+
 function scoreLabel(s) {
   if (s >= 85) return "優秀";
   if (s >= 70) return "良好";
@@ -468,9 +574,11 @@ function renderResult(a) {
   $("ovLabel").textContent = " ・ " + scoreLabel(a.overall);
 
   const defs = [
-    { key: "vol",   name: "音量レベル",      fmt: v => v.toFixed(1) },
-    { key: "noise", name: "ノイズ (SNR)",    fmt: v => v.toFixed(1) },
-    { key: "clip",  name: "音割れ",          fmt: v => v.toFixed(3) },
+    { key: "vol",       name: "音量レベル",      fmt: v => v.toFixed(1) },
+    { key: "noise",     name: "ノイズ (SNR)",    fmt: v => v.toFixed(1) },
+    { key: "clarity",   name: "明瞭度 (こもり)", fmt: v => v.toFixed(1) },
+    { key: "stability", name: "音量の安定性",    fmt: v => v.toFixed(1) },
+    { key: "clip",      name: "音割れ",          fmt: v => v.toFixed(3) },
   ];
   $("scoreCards").innerHTML = defs.map(d => {
     const m = a.metrics[d.key];
@@ -579,18 +687,29 @@ function getReferenceVoice() {
   const sr = REF_SR, dur = 2.6, N = Math.floor(sr * dur);
   const s = new Float32Array(N);
   const f0 = 130;                         // 基本周波数（男性寄り）
-  const formants = [1, 0.65, 0.9, 0.45, 0.5, 0.28, 0.16];  // 倍音の重み（フォルマント風）
+  // 3フォルマント(500/1500/2600Hz)＋緩やかな高域ロールオフで自然な声色のスペクトルを作る
+  const formantResp = (f) => {
+    const F = [[500, 0, 90], [1500, -5, 130], [2600, -8, 180]];
+    let lin = 0;
+    for (const [fc, gdb, bw] of F) lin += Math.pow(10, gdb / 20) / (1 + Math.pow((f - fc) / bw, 2));
+    return lin * Math.pow(10, (-6 * Math.log2(Math.max(f, 120) / 300)) / 20); // 300Hz超は約-6dB/oct
+  };
+  const maxH = Math.floor(5200 / f0);
+  const hAmp = [0]; for (let h = 1; h <= maxH; h++) hAmp[h] = formantResp(h * f0);
   // 音節のように区切られた発話区間（秒）
   const segs = [[0.12, 0.48], [0.58, 0.92], [1.02, 1.22], [1.42, 1.86], [1.98, 2.44]];
   for (let i = 0; i < N; i++) {
     const t = i / sr;
-    let env = 0;
-    for (const [a, b] of segs) { if (t >= a && t <= b) { env = Math.sin(Math.PI * (t - a) / (b - a)); break; } }
+    let env = 0, segStart = -1;
+    for (const [a, b] of segs) { if (t >= a && t <= b) { env = Math.sin(Math.PI * (t - a) / (b - a)); segStart = a; break; } }
     let v = 0;
     if (env > 0) {
       const f = f0 * (1 + 0.012 * Math.sin(2 * Math.PI * 5 * t));  // ビブラート
-      for (let h = 1; h <= formants.length; h++) v += formants[h - 1] * Math.sin(2 * Math.PI * f * h * t);
-      v = (v / 3.2) * env;
+      for (let h = 1; h <= maxH; h++) v += hAmp[h] * Math.sin(2 * Math.PI * f * h * t);
+      v *= env;
+      // 子音風: 各音節の先頭60msに広帯域ノイズを足し、高域(子音)成分を補う
+      const dt = t - segStart;
+      if (dt < 0.06) v += (Math.random() * 2 - 1) * (1 - dt / 0.06) * 0.5;
     }
     s[i] = v + (Math.random() * 2 - 1) * 0.001;  // ごく小さなノイズフロア(~-60dBFS)
   }
@@ -769,13 +888,14 @@ function drawSticker(a) {
   stkText(ctx, "点 / 100", W / 2, 730, "bold 56px sans-serif", "rgba(255,255,255,.95)", 8);
   stkText(ctx, bandLabelEn(s) + " ・ " + scoreLabel(s), W / 2, 815, "bold 64px sans-serif", accent, 9);
 
-  // 各軸スコア
+  // 各軸スコア（2行）
   const m = a.metrics;
-  stkText(ctx, `音量 ${m.vol.score}　ノイズ ${m.noise.score}　音割れ ${m.clip.score}`, W / 2, 905, "bold 46px sans-serif", "#ffffff", 7);
+  stkText(ctx, `音量 ${m.vol.score}　ノイズ ${m.noise.score}　明瞭 ${m.clarity.score}`, W / 2, 892, "bold 42px sans-serif", "#ffffff", 6);
+  stkText(ctx, `安定 ${m.stability.score}　音割れ ${m.clip.score}`, W / 2, 940, "bold 42px sans-serif", "#ffffff", 6);
 
   // 端末・マイク（任意）
   const dm = deviceMicLabel();
-  if (dm) stkText(ctx, dm, W / 2, 963, "34px sans-serif", "rgba(255,255,255,.92)", 5);
+  if (dm) stkText(ctx, dm, W / 2, 985, "32px sans-serif", "rgba(255,255,255,.92)", 5);
 
   // フッター
   stkText(ctx, "snaka.github.io/meeting-voice-check", W / 2, 1028, "32px sans-serif", "rgba(255,255,255,.85)", 4);
@@ -791,7 +911,7 @@ function shareText() {
   const a = lastAnalysis; if (!a) return "";
   const dm = deviceMicLabel();
   return `🎙️声チェッカー 診断結果\n総合 ${a.overall}点（${scoreLabel(a.overall)}）${faceFor(a.overall)}\n`
-    + `音量${a.metrics.vol.score} / ノイズ${a.metrics.noise.score} / 音割れ${a.metrics.clip.score}`
+    + `音量${a.metrics.vol.score} / ノイズ${a.metrics.noise.score} / 明瞭${a.metrics.clarity.score} / 安定${a.metrics.stability.score} / 音割れ${a.metrics.clip.score}`
     + (dm ? `\n${dm}` : "")
     + `\n#声チェッカー\n${SHARE_URL}`;
 }
