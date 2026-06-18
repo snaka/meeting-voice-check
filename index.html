@@ -142,6 +142,18 @@
     📢 5〜10秒、普段の会議と同じ声量・距離で何か話してみましょう（例：自己紹介）。</p>
   </div>
 
+  <!-- フィードバック（エコー）テスト -->
+  <div class="panel">
+    <h2>🔁 マイクのフィードバック（エコー）チェック</h2>
+    <p class="hint" style="margin-top:0">テスト音をスピーカーから流し、あなたのマイクがその音を拾わないかを確認します。マイクがスピーカー音を拾うと、会議で<strong>相手にエコー（声の返り）</strong>が返り、聞き取りづらくなる原因になります。</p>
+    <p class="hint">🔈 スピーカーの音量を<strong>普段の会議と同じくらい</strong>にしてください。テスト中は<strong>話さず静かに</strong>。<strong>ヘッドホン／イヤホン使用なら「拾わない＝正常」</strong>です。</p>
+    <div class="row">
+      <button id="fbBtn" class="btn-primary">▶ テスト開始（約3秒）</button>
+      <span class="hint" id="fbStatus" style="margin:0"></span>
+    </div>
+    <div id="fbResult" class="hidden" style="margin-top:14px"></div>
+  </div>
+
   <!-- 結果パネル -->
   <div class="panel hidden" id="resultPanel">
     <h2>2. 再生と診断結果</h2>
@@ -760,6 +772,126 @@ $("playNormBtn").addEventListener("click", () => {
   startPlayback(finalGain, $("playNormBtn"));
 });
 $("playRefBtn").addEventListener("click", () => playPCM(getReferenceVoice(), REF_SR, 1, $("playRefBtn")));
+
+/* ====================== フィードバック（エコー）テスト ====================== */
+const PROBE_FREQS = [940, 1560];   // テスト音の搬送波（測定対象の周波数）
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// 警報音のような2トーンAM（人の声くらいの帯域で、はっきり聞こえて測定しやすい）
+function makeProbe(sr, dur) {
+  const N = Math.floor(sr * dur), s = new Float32Array(N), fade = Math.floor(sr * 0.03);
+  for (let i = 0; i < N; i++) {
+    const t = i / sr;
+    const am = 0.6 + 0.4 * Math.sin(2 * Math.PI * 6 * t);   // 6Hzのうねり＝声っぽさ
+    let v = 0; for (const f of PROBE_FREQS) v += Math.sin(2 * Math.PI * f * t);
+    v = v / PROBE_FREQS.length * am * 0.7;
+    if (i < fade) v *= i / fade;
+    if (i > N - fade) v *= (N - i) / fade;
+    s[i] = v;
+  }
+  return s;
+}
+// 指定周波数群でのマイク信号のパワー（DFT/ゲルツェル相当, 正規化）
+function bandPowerAt(samples, sr, freqs) {
+  let total = 0;
+  for (const f of freqs) {
+    let re = 0, im = 0; const w = 2 * Math.PI * f / sr;
+    for (let n = 0; n < samples.length; n++) { re += samples[n] * Math.cos(w * n); im += samples[n] * Math.sin(w * n); }
+    total += (re * re + im * im) / (samples.length * samples.length);
+  }
+  return total / freqs.length;
+}
+const rmsOf = (a) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * a[i]; return Math.sqrt(s / Math.max(1, a.length)); };
+
+let fbRunning = false;
+$("fbBtn").addEventListener("click", runFeedbackTest);
+async function runFeedbackTest() {
+  if (fbRunning) return;
+  fbRunning = true;
+  $("fbBtn").disabled = true;
+  $("fbResult").classList.add("hidden");
+  let stream;
+  try {
+    // エコーキャンセル等は必ずオフ＝スピーカー→マイクの物理的な回り込みを測る
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false,
+    });
+  } catch (e) {
+    $("fbStatus").textContent = "マイクの許可が必要です（" + e.name + "）。";
+    $("fbBtn").disabled = false; fbRunning = false; return;
+  }
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (ctx.state === "suspended") { try { await ctx.resume(); } catch (e) {} }
+  const sr = ctx.sampleRate;
+  const src = ctx.createMediaStreamSource(stream);
+  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  const cap = [];
+  proc.onaudioprocess = (e) => cap.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  const sink = ctx.createGain(); sink.gain.value = 0;   // 録音用に動かすが音は出さない
+  src.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
+
+  const idx = () => cap.reduce((n, c) => n + c.length, 0);
+  const slice = (a, b) => { const out = new Float32Array(b - a); let pos = 0, off = 0; for (const c of cap) { for (let i = 0; i < c.length; i++) { const g = off + i; if (g >= a && g < b) out[pos++] = c[i]; } off += c.length; } return out; };
+
+  try {
+    $("fbStatus").textContent = "① 静かにしてください（ベースライン測定中）…";
+    await sleep(350); const baseStart = idx();
+    await sleep(1000); const baseEnd = idx();
+
+    $("fbStatus").textContent = "② テスト音を再生中… 話さないでください 🔈";
+    const probe = makeProbe(sr, 2.2);
+    const pbuf = ctx.createBuffer(1, probe.length, sr); pbuf.copyToChannel(probe, 0);
+    const psrc = ctx.createBufferSource(); psrc.buffer = pbuf;
+    psrc.connect(ctx.destination);
+    psrc.start();
+    await sleep(450); const probeStart = idx();   // 再生の立ち上がりを避ける
+    await sleep(1300); const probeEnd = idx();
+    try { psrc.stop(); } catch (e) {}
+
+    proc.disconnect(); src.disconnect(); sink.disconnect();
+    stream.getTracks().forEach(t => t.stop());
+    await ctx.close();
+
+    const base = slice(baseStart, baseEnd), test = slice(probeStart, probeEnd);
+    const baseBand = bandPowerAt(base, sr, PROBE_FREQS);
+    const testBand = bandPowerAt(test, sr, PROBE_FREQS);
+    // ベースラインが極端に低い（無響）と比が暴れるので下限を設ける
+    const leakDb = 10 * Math.log10(Math.max(testBand, 1e-12) / Math.max(baseBand, 1e-7));
+    renderFeedbackResult(leakDb, rmsOf(base), rmsOf(test));
+    $("fbStatus").textContent = "";
+  } catch (e) {
+    $("fbStatus").textContent = "テスト中にエラーが発生しました: " + e.message;
+    try { stream.getTracks().forEach(t => t.stop()); } catch (e2) {}
+  }
+  $("fbBtn").disabled = false; fbRunning = false;
+}
+
+function renderFeedbackResult(leakDb, baseRms, testRms) {
+  let color, title, advice;
+  if (leakDb < 8) {
+    color = scoreHex(95); title = "✅ スピーカー音をほぼ拾っていません";
+    advice = "フィードバックの心配は低い状態です。ヘッドホン／イヤホン使用なら、これが正常な結果です。"
+      + "<br><span style='color:var(--muted)'>※ スピーカーを使っているのにこの結果なら、スピーカー音量が小さい可能性があります。音量を上げて再テストしてください。</span>";
+  } else if (leakDb < 20) {
+    color = scoreHex(60); title = "⚠️ スピーカー音をある程度拾っています";
+    advice = "会議アプリのエコーキャンセルが弱い／切れていると、相手にエコーが返る可能性があります。<strong>ヘッドホン／イヤホンの使用</strong>、またはマイクをスピーカーから離す・指向性マイクの利用を検討してください。";
+  } else {
+    color = scoreHex(20); title = "🚨 スピーカー音を強く拾っています";
+    advice = "このままだと会議で相手にエコー／フィードバックが返りやすい状態です。<strong>ヘッドホン／イヤホンの使用を強く推奨</strong>します。";
+  }
+  const pct = clamp(leakDb / 35 * 100, 0, 100);
+  $("fbResult").innerHTML = `
+    <div style="border:1px solid ${color};border-radius:10px;padding:14px 16px;">
+      <div style="font-weight:700;color:${color};margin-bottom:8px">${title}</div>
+      <div style="font-size:.85rem;color:var(--muted);margin-bottom:4px">テスト音の漏れ込み量（ベースライン比）</div>
+      <div class="bar" style="height:10px"><div style="width:${pct}%;background:${color}"></div></div>
+      <div style="font-size:.85rem;margin:6px 0 10px"><b style="color:${color}">${leakDb.toFixed(1)} dB</b>
+        <span style="color:var(--muted)">（〜8:低 / 8〜20:中 / 20〜:高　参考: マイク入力 ベース ${(20*Math.log10(baseRms+1e-9)).toFixed(0)} → 再生中 ${(20*Math.log10(testRms+1e-9)).toFixed(0)} dBFS）</span>
+      </div>
+      <div style="font-size:.88rem;line-height:1.6">${advice}</div>
+    </div>`;
+  $("fbResult").classList.remove("hidden");
+}
 
 /* ====================== WAV ダウンロード ====================== */
 function prepareDownload(samples, sr) {
