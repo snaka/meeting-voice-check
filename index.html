@@ -49,6 +49,26 @@
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 560px) { .grid2 { grid-template-columns: 1fr; } }
   .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  /* ステッパー */
+  .stepper { display: flex; gap: 8px; margin-bottom: 18px; }
+  .step-ind { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 6px; border-radius: 10px; background: var(--panel); color: var(--muted); font-size: 0.9rem; border: 1px solid var(--border); cursor: pointer; user-select: none; transition: .15s; }
+  .step-ind .step-num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--panel2); color: var(--muted); font-size: 0.8rem; font-weight: 700; flex: none; }
+  .step-ind.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 700; }
+  .step-ind.active .step-num { background: #fff; color: var(--accent); }
+  .step-ind.done { color: var(--text); border-color: #3a6ea5; }
+  .step-ind.done .step-num { background: var(--good); color: #0d1320; }
+  @media (max-width: 480px) { .step-ind { font-size: 0; padding: 8px; gap: 0; } .step-ind .step-num { font-size: 0.85rem; } }
+  /* ステップ内のグループ分け */
+  .grp { margin-bottom: 16px; }
+  .grp-label { font-size: 0.82rem; color: var(--muted); margin-bottom: 8px; font-weight: 600; }
+  .wiz-nav { display: flex; justify-content: space-between; gap: 10px; margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); }
+  /* 折りたたみ（任意ツール） */
+  details.subtool { margin-top: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); }
+  details.subtool > summary { cursor: pointer; padding: 12px 14px; font-weight: 600; font-size: 0.92rem; list-style: none; }
+  details.subtool > summary::-webkit-details-marker { display: none; }
+  details.subtool > summary::before { content: "▸ "; color: var(--muted); }
+  details.subtool[open] > summary::before { content: "▾ "; }
+  details.subtool > div { padding: 0 14px 14px; }
   button {
     font: inherit;
     border: none;
@@ -113,9 +133,16 @@
 
   <div id="errBox" class="err hidden"></div>
 
-  <!-- 録音パネル -->
-  <div class="panel">
-    <h2>1. 録音</h2>
+  <!-- ステッパー -->
+  <div class="stepper">
+    <div class="step-ind active" data-step="1"><span class="step-num">1</span> 録音</div>
+    <div class="step-ind" data-step="2"><span class="step-num">2</span> 診断結果</div>
+    <div class="step-ind" data-step="3"><span class="step-num">3</span> シェア</div>
+  </div>
+
+  <!-- ステップ1: 録音 -->
+  <div class="panel step" data-step="1">
+    <h2>① マイクを選んで録音</h2>
     <div style="margin-bottom:14px;">
       <label>テストするマイク（入力デバイス）</label>
       <select id="micSelect"></select>
@@ -134,30 +161,36 @@
       <label><input type="checkbox" id="tAgc"> 自動音量調整(AGC)</label>
     </div>
     <p class="hint">💡 正確に診断するため、初期状態ではブラウザの音声処理をすべて<strong>オフ</strong>にしています（生のマイク信号を測定）。会議アプリと同じ条件で確かめたい場合はオンにしてください。<br>
-    📢 5〜10秒、普段の会議と同じ声量・距離で何か話してみましょう（例：自己紹介）。</p>
+    📢 5〜10秒、普段の会議と同じ声量・距離で何か話してみましょう（例：自己紹介）。録音を止めると診断結果へ進みます。</p>
+
+    <!-- 任意: フィードバック（エコー）チェック -->
+    <details class="subtool">
+      <summary>🔁 マイクのフィードバック（エコー）チェック（任意）</summary>
+      <div>
+        <p class="hint" style="margin-top:0">テスト音をスピーカーから流し、あなたのマイクがその音を拾わないかを確認します。マイクがスピーカー音を拾うと、会議で<strong>相手にエコー（声の返り）</strong>が返り、聞き取りづらくなる原因になります。</p>
+        <p class="hint">🔈 スピーカーの音量を<strong>普段の会議と同じくらい</strong>にしてください。テスト中は<strong>話さず静かに</strong>。<strong>ヘッドホン／イヤホン使用なら「拾わない＝正常」</strong>です。</p>
+        <div class="row">
+          <button id="fbBtn" class="btn-ghost">▶ テスト開始（約3秒）</button>
+          <span class="hint" id="fbStatus" style="margin:0"></span>
+        </div>
+        <div id="fbResult" class="hidden" style="margin-top:14px"></div>
+      </div>
+    </details>
   </div>
 
-  <!-- フィードバック（エコー）テスト -->
-  <div class="panel">
-    <h2>🔁 マイクのフィードバック（エコー）チェック</h2>
-    <p class="hint" style="margin-top:0">テスト音をスピーカーから流し、あなたのマイクがその音を拾わないかを確認します。マイクがスピーカー音を拾うと、会議で<strong>相手にエコー（声の返り）</strong>が返り、聞き取りづらくなる原因になります。</p>
-    <p class="hint">🔈 スピーカーの音量を<strong>普段の会議と同じくらい</strong>にしてください。テスト中は<strong>話さず静かに</strong>。<strong>ヘッドホン／イヤホン使用なら「拾わない＝正常」</strong>です。</p>
-    <div class="row">
-      <button id="fbBtn" class="btn-primary">▶ テスト開始（約3秒）</button>
-      <span class="hint" id="fbStatus" style="margin:0"></span>
-    </div>
-    <div id="fbResult" class="hidden" style="margin-top:14px"></div>
-  </div>
+  <!-- ステップ2: 診断結果 -->
+  <div class="panel step hidden" data-step="2" id="resultPanel">
+    <h2>② 再生と診断結果</h2>
 
-  <!-- 結果パネル -->
-  <div class="panel hidden" id="resultPanel">
-    <h2>2. 再生と診断結果</h2>
-    <div class="row" style="margin-bottom:14px;">
-      <button id="playBtn" class="btn-primary">▶ 元の音量で再生</button>
-      <button id="playNormBtn" class="btn-ghost">🔊 目標音量に補正して再生</button>
-      <a class="dl" id="dlLink" href="#" download="my-voice.wav">⬇ WAVをダウンロード</a>
+    <div class="grp">
+      <div class="grp-label">再生して確認</div>
+      <div class="row">
+        <button id="playBtn" class="btn-primary">▶ 元の音量で再生</button>
+        <button id="playNormBtn" class="btn-ghost">🔊 目標音量に補正して再生</button>
+        <a class="dl" id="dlLink" href="#" download="my-voice.wav" style="margin-left:auto">⬇ WAVを保存</a>
+      </div>
+      <p class="hint" id="playHint" style="margin:6px 0 0">「元の音量」と「補正後」を聞き比べると、目標レベルまでどれだけ持ち上げが必要かが体感できます。</p>
     </div>
-    <p class="hint" id="playHint" style="margin-top:0">「元の音量」と「補正後」を聞き比べると、目標レベルまでどれだけ持ち上げが必要かが体感できます。</p>
 
     <div class="waveLabel"><b>🎙️ あなたの声</b><span style="color:var(--muted)">緑＝目標RMS／赤＝クリップ閾値</span></div>
     <canvas id="wave" width="1680" height="240"></canvas>
@@ -177,32 +210,47 @@
     </div>
 
     <div class="scores" id="scoreCards"></div>
+
+    <div class="wiz-nav">
+      <button class="btn-ghost" data-goto="1">← 録音し直す</button>
+      <button class="btn-primary" data-goto="3">シェアへ進む →</button>
+    </div>
   </div>
 
-  <!-- 共有パネル -->
-  <div class="panel hidden" id="sharePanel">
-    <h2>3. 結果をシェア</h2>
+  <!-- ステップ3: シェア -->
+  <div class="panel step hidden" data-step="3" id="sharePanel">
+    <h2>③ 結果をシェア</h2>
     <p class="hint" style="margin-top:0">スコアをステッカー画像にして共有できます。高得点ほど絵柄が増えて豪華になります 🎉</p>
 
-    <div class="row" style="margin-bottom:14px;">
-      <button id="copyImgBtn" class="btn-primary">🖼️ ステッカーを画像コピー</button>
-      <button id="dlImgBtn" class="btn-ghost">⬇ 画像を保存</button>
-      <button id="copyTxtBtn" class="btn-ghost">📋 テキストをコピー</button>
-      <button id="webShareBtn" class="btn-ghost hidden">📤 共有…</button>
-    </div>
-
-    <div id="stickerWrap" style="text-align:center;margin-bottom:14px;">
+    <div id="stickerWrap" style="text-align:center;margin:4px 0 16px;">
       <canvas id="sticker" width="1080" height="1080" style="width:320px;height:320px;max-width:100%;border-radius:16px;"></canvas>
     </div>
 
-    <label style="margin-bottom:8px;">SNS・チャットに投稿（テキストが入力されます。画像は ⌘V / Ctrl+V で貼り付け）</label>
-    <div class="row" id="snsRow">
-      <button class="btn-ghost share-btn" data-net="x">𝕏 (Twitter)</button>
-      <button class="btn-ghost share-btn" data-net="bluesky">🦋 Bluesky</button>
-      <button class="btn-ghost share-btn" data-net="mixi2">🌸 mixi2</button>
-      <button class="btn-ghost share-btn" data-net="slack">💬 社内Slack</button>
+    <div class="grp">
+      <div class="grp-label">画像として</div>
+      <div class="row">
+        <button id="copyImgBtn" class="btn-primary">🖼️ 画像をコピー</button>
+        <button id="dlImgBtn" class="btn-ghost">⬇ 保存</button>
+        <button id="webShareBtn" class="btn-ghost hidden">📤 共有…</button>
+      </div>
+    </div>
+
+    <div class="grp">
+      <div class="grp-label">SNS・チャットに投稿 <span style="font-weight:400;color:var(--muted)">（テキスト自動入力。画像は ⌘V / Ctrl+V で貼り付け）</span></div>
+      <div class="row" id="snsRow">
+        <button id="copyTxtBtn" class="btn-ghost">📋 テキストをコピー</button>
+        <button class="btn-ghost share-btn" data-net="x">𝕏 (Twitter)</button>
+        <button class="btn-ghost share-btn" data-net="bluesky">🦋 Bluesky</button>
+        <button class="btn-ghost share-btn" data-net="mixi2">🌸 mixi2</button>
+        <button class="btn-ghost share-btn" data-net="slack">💬 社内Slack</button>
+      </div>
     </div>
     <p class="hint" id="shareMsg" style="min-height:1.2em;"></p>
+
+    <div class="wiz-nav">
+      <button class="btn-ghost" data-goto="2">← 結果に戻る</button>
+      <button class="btn-ghost" data-goto="1">↺ 最初からやり直す</button>
+    </div>
   </div>
 </div>
 
@@ -368,9 +416,7 @@ function stopRecording() {
   drawSticker(lastAnalysis);
   stickerBlob = null;            // 内容が変わったので作り直し
   $("shareMsg").textContent = "";
-  $("resultPanel").classList.remove("hidden");
-  $("sharePanel").classList.remove("hidden");
-  $("resultPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  gotoStep(2);                   // 録音完了 → 診断結果ステップへ
 }
 
 /* ====================== 音声解析 ====================== */
@@ -1143,6 +1189,26 @@ document.querySelectorAll(".share-btn").forEach(btn => {
     }
   });
 });
+
+/* ====================== ウィザード（ステップ遷移） ====================== */
+let curStep = 1;
+function gotoStep(n) {
+  curStep = n;
+  document.querySelectorAll(".step").forEach(el => el.classList.toggle("hidden", Number(el.dataset.step) !== n));
+  document.querySelectorAll(".step-ind").forEach(el => {
+    const s = Number(el.dataset.step);
+    el.classList.toggle("active", s === n);
+    el.classList.toggle("done", s < n);
+  });
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+// ステッパーのクリック（2・3は録音後のみ移動可）
+document.querySelectorAll(".step-ind").forEach(el => el.addEventListener("click", () => {
+  const s = Number(el.dataset.step);
+  if (s === 1 || lastAnalysis) gotoStep(s);
+}));
+// 各ステップの「戻る/進む」ボタン
+document.querySelectorAll("[data-goto]").forEach(b => b.addEventListener("click", () => gotoStep(Number(b.dataset.goto))));
 
 /* ====================== 共通 ====================== */
 function showError(msg) {
