@@ -71,7 +71,12 @@
   .hint { font-size: 0.82rem; color: var(--muted); margin-top: 10px; }
   .toggles { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 14px; }
   .toggles label { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 0.85rem; cursor: pointer; }
-  canvas { width: 100%; height: 90px; display: block; background: var(--panel2); border-radius: 8px; }
+  canvas#wave, canvas#waveRef { width: 100%; height: 120px; display: block; background: #0d1422; border-radius: 8px; }
+  .waveLabel { font-size: 0.82rem; color: var(--muted); margin: 12px 0 4px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .waveLabel b { color: var(--text); }
+  .info { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; border-radius: 50%; border: 1px solid var(--muted); color: var(--muted); font-size: 11px; line-height: 1; cursor: help; position: relative; vertical-align: middle; font-weight: 700; }
+  .info .tip { display: none; position: absolute; left: 0; top: 150%; width: 270px; max-width: 80vw; background: #0d1320; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 0.78rem; line-height: 1.65; color: var(--text); font-weight: 400; z-index: 20; box-shadow: 0 8px 24px #000a; }
+  .info:hover .tip, .info.open .tip { display: block; }
   .scores { display: grid; grid-template-columns: repeat(2,1fr); gap: 14px; margin-top: 8px; }
   @media (max-width: 560px) { .scores { grid-template-columns: 1fr; } }
   .scard { background: var(--panel2); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
@@ -146,7 +151,15 @@
       <a class="dl" id="dlLink" href="#" download="my-voice.wav">⬇ WAVをダウンロード</a>
     </div>
     <p class="hint" id="playHint" style="margin-top:0">「元の音量」と「補正後」を聞き比べると、目標レベルまでどれだけ持ち上げが必要かが体感できます。</p>
-    <canvas id="wave" width="840" height="90"></canvas>
+
+    <div class="waveLabel"><b>🎙️ あなたの声</b><span style="color:var(--muted)">緑＝目標RMS／赤＝クリップ閾値</span></div>
+    <canvas id="wave" width="1680" height="240"></canvas>
+
+    <div class="waveLabel"><b>⭐ お手本（理想）</b><span style="color:var(--muted)">適切な音量・クリア・音割れなし</span>
+      <button id="playRefBtn" class="btn-ghost" style="padding:4px 12px;font-size:.8rem;margin-left:auto">▶ お手本を再生</button>
+    </div>
+    <canvas id="waveRef" width="1680" height="240"></canvas>
+    <p class="hint" style="margin-top:6px">⭐ お手本と同じ目盛り（同じ縦スケール）で表示しています。あなたの波形が緑の「目標RMS」線に届いているか、お手本と見比べてみてください。</p>
 
     <!-- dBFS スケール上での自分の位置（比較ビジュアル） -->
     <div id="volScale"></div>
@@ -303,6 +316,7 @@ function stopRecording() {
   lastAnalysis = analyze(samples, recSampleRate);
   renderResult(lastAnalysis);
   drawWave(samples);
+  drawWaveform($("waveRef"), getReferenceVoice());
   prepareDownload(samples, recSampleRate);
   drawSticker(lastAnalysis);
   stickerBlob = null;            // 内容が変わったので作り直し
@@ -405,11 +419,18 @@ function scoreVolume(db, speechRatio) {
 }
 
 function scoreSNR(snr) {
-  const score = clamp((snr - 10) / (35 - 10) * 100, 0, 100);
+  // 8dB以下=要改善、30dB以上=ほぼ満点 を目安にした区分線形
+  let score;
+  if (snr <= 8) score = 0;
+  else if (snr < 15) score = (snr - 8) / 7 * 50;
+  else if (snr < 30) score = 50 + (snr - 15) / 15 * 40;
+  else score = 90 + (snr - 30) / 10 * 10;
+  score = clamp(score, 0, 100);
+  // 助言はスコア帯から導出（ラベルと矛盾しないように）
   let advice;
-  if (snr >= 30) advice = "とてもクリアです。背景ノイズはほぼ気になりません。";
-  else if (snr >= 20) advice = "良好。多くの環境で問題なく聞き取れます。";
-  else if (snr >= 12) advice = "背景ノイズがやや乗っています。静かな場所やノイズ抑制を検討しましょう。";
+  if (score >= 85) advice = "とてもクリアです。背景ノイズはほぼ気になりません。";
+  else if (score >= 70) advice = "良好。多くの環境で問題なく聞き取れます。";
+  else if (score >= 50) advice = "背景ノイズがやや乗っています。静かな場所やノイズ抑制を検討しましょう。";
   else advice = "ノイズが大きく聞き取りづらい状態です。環境音を減らすか指向性マイクを検討してください。";
   return { score: Math.round(score), label: scoreLabel(score), value: snr, unit: "dB SNR", advice };
 }
@@ -482,7 +503,7 @@ function renderVolScale(a) {
   $("volScale").innerHTML = `
     <div style="margin-top:18px;">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
-        <strong style="font-size:.9rem">音量レベルの位置（dBFSスケール）</strong>
+        <strong style="font-size:.9rem">音量レベルの位置（dBFSスケール）<span class="info" tabindex="0" role="button" aria-label="dBFSとは">?<span class="tip"><b>dBFS</b>＝デジタル音量の単位。<b>0 dBFSが最大</b>（これを超えると音割れ＝クリップ）。普通の音はすべてマイナスで、0に近いほど大きい音、大きくマイナスほど小さい音です。会議は <b>-20 dBFS 前後</b>が目安で、<b>緑の帯（-27〜-16）</b>に入っていれば適切。マイナスは異常ではなく、0までの「余裕」がある健全な状態です。</span></span></strong>
         <span style="font-size:.78rem;color:var(--muted)">緑＝適切 / 黄＝大きめ / 赤＝過大・クリップ域</span>
       </div>
       <div style="position:relative;height:26px;border-radius:6px;background:${grad}">
@@ -501,52 +522,96 @@ function renderVolScale(a) {
     </div>`;
 }
 
-function drawWave(samples) {
-  const cv = $("wave");
+function drawWave(samples) { drawWaveform($("wave"), samples); }
+
+// 波形を高コントラストの塗りつぶしで描画（user / お手本 共通）。縦スケールは固定で揃える。
+function drawWaveform(cv, samples) {
   const ctx = cv.getContext("2d");
   const W = cv.width, H = cv.height, mid = H / 2;
   ctx.clearRect(0, 0, W, H);
-  ctx.strokeStyle = "#34415c";
+
+  // 振幅グリッド（±0.5, ±1.0）
+  ctx.strokeStyle = "rgba(255,255,255,.07)"; ctx.lineWidth = 1;
+  [0.5, 1.0].forEach(a => {
+    ctx.beginPath();
+    ctx.moveTo(0, mid - a * mid); ctx.lineTo(W, mid - a * mid);
+    ctx.moveTo(0, mid + a * mid); ctx.lineTo(W, mid + a * mid);
+    ctx.stroke();
+  });
+  // 中心線
+  ctx.strokeStyle = "rgba(255,255,255,.18)";
   ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(W, mid); ctx.stroke();
-  ctx.strokeStyle = "var(--accent)";
-  ctx.fillStyle = "rgba(79,157,255,.35)";
-  const step = Math.ceil(samples.length / W);
-  ctx.beginPath();
+
+  // 波形エンベロープを塗りつぶし（明るい色＝高コントラスト）
+  const step = Math.max(1, Math.floor(samples.length / W));
+  ctx.fillStyle = "#5fb3ff";
   for (let x = 0; x < W; x++) {
     let min = 1, max = -1;
-    for (let i = 0; i < step; i++) {
-      const s = samples[x * step + i] || 0;
-      if (s < min) min = s; if (s > max) max = s;
-    }
-    ctx.moveTo(x, mid - max * mid);
-    ctx.lineTo(x, mid - min * mid);
+    const base = x * step;
+    for (let i = 0; i < step; i++) { const s = samples[base + i] || 0; if (s < min) min = s; if (s > max) max = s; }
+    if (max < min) { min = 0; max = 0; }
+    let yTop = mid - max * mid, yBot = mid - min * mid;
+    if (yBot - yTop < 2) { yTop = mid - 1; yBot = mid + 1; }  // 無音でも線が見えるように
+    ctx.fillRect(x, yTop, 1, yBot - yTop);
   }
-  ctx.stroke();
 
-  // ガイド線: 目標RMS(緑) と クリップ閾値(赤) を波形に重ねる
+  // ガイド線: 目標RMS(緑) と クリップ閾値(赤)
   const guide = (amp, color, dash, label) => {
     ctx.save();
-    ctx.strokeStyle = color; ctx.setLineDash(dash);
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.setLineDash(dash);
     ctx.beginPath();
     ctx.moveTo(0, mid - amp * mid); ctx.lineTo(W, mid - amp * mid);
     ctx.moveTo(0, mid + amp * mid); ctx.lineTo(W, mid + amp * mid);
     ctx.stroke();
-    ctx.setLineDash([]); ctx.fillStyle = color; ctx.font = "10px sans-serif";
-    ctx.fillText(label, 4, Math.max(9, mid - amp * mid - 2));
+    ctx.setLineDash([]); ctx.fillStyle = color; ctx.font = "bold 22px sans-serif";
+    ctx.fillText(label, 8, Math.max(22, mid - amp * mid - 6));
     ctx.restore();
   };
-  guide(0.985, "rgba(248,113,113,.7)", [4, 3], "クリップ");
-  guide(Math.pow(10, VOL_TARGET / 20), "rgba(52,211,153,.8)", [5, 4], "目標RMS");
+  guide(0.985, "rgba(248,113,113,.85)", [8, 6], "クリップ");
+  guide(Math.pow(10, VOL_TARGET / 20), "rgba(52,211,153,.95)", [10, 8], "目標RMS");
+}
+
+/* ====================== お手本（理想音声）の生成 ====================== */
+const REF_SR = 44100;
+let refSamples = null;
+function getReferenceVoice() {
+  if (refSamples) return refSamples;
+  const sr = REF_SR, dur = 2.6, N = Math.floor(sr * dur);
+  const s = new Float32Array(N);
+  const f0 = 130;                         // 基本周波数（男性寄り）
+  const formants = [1, 0.65, 0.9, 0.45, 0.5, 0.28, 0.16];  // 倍音の重み（フォルマント風）
+  // 音節のように区切られた発話区間（秒）
+  const segs = [[0.12, 0.48], [0.58, 0.92], [1.02, 1.22], [1.42, 1.86], [1.98, 2.44]];
+  for (let i = 0; i < N; i++) {
+    const t = i / sr;
+    let env = 0;
+    for (const [a, b] of segs) { if (t >= a && t <= b) { env = Math.sin(Math.PI * (t - a) / (b - a)); break; } }
+    let v = 0;
+    if (env > 0) {
+      const f = f0 * (1 + 0.012 * Math.sin(2 * Math.PI * 5 * t));  // ビブラート
+      for (let h = 1; h <= formants.length; h++) v += formants[h - 1] * Math.sin(2 * Math.PI * f * h * t);
+      v = (v / 3.2) * env;
+    }
+    s[i] = v + (Math.random() * 2 - 1) * 0.001;  // ごく小さなノイズフロア(~-60dBFS)
+  }
+  // 発話区間の RMS を 目標(-20dBFS) に正規化。ピークがクリップしないようゲインを制限。
+  let sum = 0, cnt = 0, peak = 0;
+  for (let i = 0; i < N; i++) { const a = Math.abs(s[i]); if (a > peak) peak = a; if (a > 0.01) { sum += s[i] * s[i]; cnt++; } }
+  const rms = Math.sqrt(sum / Math.max(1, cnt));
+  let gain = Math.pow(10, VOL_TARGET / 20) / Math.max(rms, 1e-6);
+  gain = Math.min(gain, 0.8 / Math.max(peak, 1e-6));  // ピーク -2dBFS 程度に収める
+  for (let i = 0; i < N; i++) s[i] *= gain;
+  refSamples = s;
+  return s;
 }
 
 /* ====================== 再生 ====================== */
 let playCtx = null;
-function startPlayback(gain, btn) {
-  if (!recordedBuffer) return;
+function playPCM(samples, sr, gain, btn) {
   if (playSource) { try { playSource.stop(); } catch (e) {} return; }  // 再生中なら停止のみ
   playCtx = new (window.AudioContext || window.webkitAudioContext)();
-  const buf = playCtx.createBuffer(1, recordedBuffer.samples.length, recordedBuffer.sampleRate);
-  buf.copyToChannel(recordedBuffer.samples, 0);
+  const buf = playCtx.createBuffer(1, samples.length, sr);
+  buf.copyToChannel(samples, 0);
   const src = playCtx.createBufferSource();
   src.buffer = buf;
   const g = playCtx.createGain();
@@ -562,6 +627,10 @@ function startPlayback(gain, btn) {
   src.start();
   btn.textContent = "■ 停止";
 }
+function startPlayback(gain, btn) {
+  if (!recordedBuffer) return;
+  playPCM(recordedBuffer.samples, recordedBuffer.sampleRate, gain, btn);
+}
 $("playBtn").addEventListener("click", () => startPlayback(1, $("playBtn")));
 $("playNormBtn").addEventListener("click", () => {
   if (!lastAnalysis) return;
@@ -571,6 +640,7 @@ $("playNormBtn").addEventListener("click", () => {
   const finalGain = Math.min(gain, 0.99 / Math.max(peakLin, 1e-6));
   startPlayback(finalGain, $("playNormBtn"));
 });
+$("playRefBtn").addEventListener("click", () => playPCM(getReferenceVoice(), REF_SR, 1, $("playRefBtn")));
 
 /* ====================== WAV ダウンロード ====================== */
 function prepareDownload(samples, sr) {
@@ -804,6 +874,13 @@ function showError(msg) {
   if (!msg) { b.classList.add("hidden"); b.textContent = ""; return; }
   b.classList.remove("hidden"); b.textContent = msg;
 }
+
+// ⓘツールチップのタップ開閉（モバイル向け。デスクトップは hover でも開く）
+document.addEventListener("click", (e) => {
+  const info = e.target.closest(".info");
+  document.querySelectorAll(".info.open").forEach(el => { if (el !== info) el.classList.remove("open"); });
+  if (info) info.classList.toggle("open");
+});
 </script>
 </body>
 </html>
