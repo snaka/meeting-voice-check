@@ -71,6 +71,10 @@ ffmpeg -y -i /tmp/ref.aiff -ac 1 -ar 24000 -b:a 56k ref-voice.mp3
 
 `loadReference()` が読み込み時に -20dBFS へ正規化するので、ファイル側の音量は気にしなくてよい。
 
+## OGP 画像（SNS 共有用）
+
+`ogp.png`（1200×630）は `ogp-template.html` をブラウザで 1200×630 にして撮ったもの。絵文字・日本語フォントを確実に描くため Chrome レンダリングで生成する（rsvg/ImageMagick だと絵文字が出ない）。デザインを変えたら `ogp-template.html` を編集 → http で開いて 1200×630 にリサイズ → スクショを `ogp.png` に保存。`<head>` の `og:image` 等は **絶対URL**（`https://snaka.github.io/...`）であること。
+
 ## フィードバック（エコー）テスト
 
 `runFeedbackTest()`: テスト音(`PROBE_FREQS = [940, 1560]` Hz の2トーンAM)をスピーカーから流し、無音ベースラインと再生中でマイクの**当該周波数のパワー(ゲルツェル相当)**を比較。上昇量(dB)で判定（`<8` 低 / `8-20` 中 / `20-` 高）。AEC を切って音響結合そのものを測るため、ヘッドホン使用なら「拾わない＝正常」。

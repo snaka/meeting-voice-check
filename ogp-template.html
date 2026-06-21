@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    background:
+      radial-gradient(900px 500px at 88% 8%, rgba(79,157,255,.22), transparent 60%),
+      radial-gradient(700px 500px at 10% 100%, rgba(52,211,153,.14), transparent 55%),
+      linear-gradient(135deg, #0d1320 0%, #1a2231 100%);
+    color: #e6ebf5;
+    position: relative;
+  }
+  .frame { position: absolute; inset: 22px; border: 1px solid #2c3a52; border-radius: 22px; }
+  .pad { position: absolute; left: 70px; top: 64px; width: 720px; display: flex; flex-direction: column; }
+  .title { font-size: 92px; font-weight: 800; letter-spacing: -1px; line-height: 1; }
+  .title .mic { font-size: 84px; }
+  .sub { margin-top: 26px; font-size: 36px; font-weight: 600; color: #cdd6e6; line-height: 1.35; }
+  .sub b { color: #5fb3ff; }
+  .chips { margin-top: 38px; display: flex; gap: 13px; flex-wrap: nowrap; }
+  .chip { font-size: 27px; font-weight: 700; padding: 11px 18px; border-radius: 999px; border: 2px solid; background: rgba(255,255,255,.04); white-space: nowrap; }
+  .c1 { color: #34d399; border-color: #34d399; }
+  .c2 { color: #a3e635; border-color: #a3e635; }
+  .c3 { color: #5fb3ff; border-color: #5fb3ff; }
+  .c4 { color: #fbbf24; border-color: #fbbf24; }
+  .c5 { color: #f87171; border-color: #f87171; }
+  .url { position: absolute; left: 70px; bottom: 56px; font-size: 30px; color: #8a96ab; font-weight: 600; }
+  /* 右側のスコアゲージ */
+  .gauge { position: absolute; right: 96px; top: 50%; transform: translateY(-50%); width: 300px; height: 300px; border-radius: 50%;
+    background: conic-gradient(#34d399 0% 92%, #222b3d 92% 100%);
+    display: flex; align-items: center; justify-content: center; box-shadow: 0 20px 60px rgba(0,0,0,.45); }
+  .gauge::before { content: ""; position: absolute; inset: 26px; border-radius: 50%; background: #131a28; }
+  .gauge .inner { position: relative; text-align: center; }
+  .gauge .num { font-size: 132px; font-weight: 800; color: #34d399; line-height: 1; }
+  .gauge .lbl { margin-top: 6px; font-size: 30px; color: #cdd6e6; font-weight: 700; }
+  .gauge .face { position: absolute; top: -8px; right: -8px; font-size: 64px; }
+  /* 波形の飾り */
+  .wave { position: absolute; left: 70px; bottom: 118px; display: flex; align-items: flex-end; gap: 7px; height: 70px; opacity: .5; }
+  .wave i { width: 8px; background: #5fb3ff; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <div class="frame"></div>
+  <div class="pad">
+    <div class="title"><span class="mic">🎙️</span> 声チェッカー</div>
+    <div class="sub">オンライン会議の自分の声を<br><b>5軸で自己診断</b>＋エコーチェック</div>
+    <div class="chips">
+      <span class="chip c1">音量</span>
+      <span class="chip c2">ノイズ</span>
+      <span class="chip c3">明瞭度</span>
+      <span class="chip c4">安定性</span>
+      <span class="chip c5">音割れ</span>
+    </div>
+  </div>
+  <div class="wave" id="wave"></div>
+  <div class="url">snaka.github.io/meeting-voice-check</div>
+  <div class="gauge">
+    <span class="face">🤩</span>
+    <div class="inner"><div class="num">92</div><div class="lbl">総合スコア</div></div>
+  </div>
+  <script>
+    // ランダムっぽい波形バーを生成
+    const heights = [22,38,55,30,62,48,68,40,58,33,50,66,44,28,54,36,60,42];
+    const w = document.getElementById('wave');
+    heights.forEach(h => { const b = document.createElement('i'); b.style.height = h + 'px'; w.appendChild(b); });
+  </script>
+</body>
+</html>
