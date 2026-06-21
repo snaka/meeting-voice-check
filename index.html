@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>声チェッカー — オンライン会議の声を自己診断</title>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-7S9C579VP5"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-7S9C579VP5');
+</script>
 <meta name="description" content="オンライン会議で自分の声が相手にどう聞こえているかを、音量・ノイズ・明瞭度・安定性・音割れの5軸で自己診断。マイクのエコー（フィードバック）チェックも。ブラウザだけで完結し、音声は外部送信しません。">
 <!-- Open Graph / Twitter Card -->
 <meta property="og:type" content="website">
@@ -154,7 +162,7 @@
 <div class="wrap">
   <header>
     <h1>🎙️ 声チェッカー</h1>
-    <p>オンライン会議で自分の声が相手にどう聞こえているかを録音・再生し、音量／ノイズ／明瞭度／安定性／音割れの5軸で定量診断します。マイクのフィードバック（エコー）チェックも可能。データはすべてこの端末内（ブラウザ）にのみ保存され、外部へ送信されません。</p>
+    <p>オンライン会議で自分の声が相手にどう聞こえているかを録音・再生し、音量／ノイズ／明瞭度／安定性／音割れの5軸で定量診断します。マイクのフィードバック（エコー）チェックも可能。<strong>音声・診断結果は外部に送信せず</strong>、すべて端末内（ブラウザ）で処理します（アクセス解析のため Google Analytics のみ利用）。</p>
   </header>
 
   <div id="errBox" class="err hidden"></div>

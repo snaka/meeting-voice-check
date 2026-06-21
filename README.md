@@ -37,7 +37,8 @@ python3 -m http.server
 
 - `index.html`（ビルド不要・依存なし）＋ お手本音声 `ref-voice.mp3`（約42KB）
 - Web Audio API（getUserMedia / ScriptProcessor / AudioBuffer / FFT）
-- 録音データは外部送信せず、ブラウザのメモリ内のみで処理（永続保存なし）
+- 録音データ・診断結果は外部送信せず、ブラウザのメモリ内のみで処理（永続保存なし）
+- アクセス解析として Google Analytics (GA4) を利用（測定ID `G-7S9C579VP5`）。音声・診断結果は送信せず、ページ閲覧などの一般的な統計のみ
 
 ## 将来の拡張（現状スコープ外）
 
