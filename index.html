@@ -126,8 +126,16 @@
   .bar > div { height: 100%; border-radius: 4px; }
   .scard .advice { font-size: 0.82rem; color: var(--muted); }
   .overall { text-align: center; padding: 8px 0 4px; }
-  .overall .big { font-size: 3rem; font-weight: 800; line-height: 1; }
-  .overall .lbl { color: var(--muted); font-size: 0.85rem; }
+  .overall .lbl { color: var(--muted); font-size: 0.85rem; margin-top: 10px; }
+  /* 総合スコアのリングゲージ */
+  .gauge { position: relative; width: 190px; height: 190px; margin: 0 auto; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: conic-gradient(#2a3447 0 100%); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  .gauge::before { content: ""; position: absolute; inset: 18px; border-radius: 50%; background: var(--panel); }
+  .gauge .gauge-inner { position: relative; text-align: center; }
+  .gauge .gauge-num { font-size: 62px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+  .gauge .gauge-cap { font-size: 0.78rem; color: var(--muted); margin-top: 4px; }
+  .gauge .gauge-face { position: absolute; top: -4px; right: -2px; font-size: 42px; line-height: 1; }
   .hidden { display: none; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
@@ -201,9 +209,15 @@
     <h2>② 診断結果</h2>
 
     <!-- スコアを先頭に -->
-    <div class="overall" style="margin-top:4px;">
-      <div class="big" id="ovScore">--</div>
-      <div class="lbl">総合スコア（100点満点）<span id="ovLabel"></span></div>
+    <div class="overall" style="margin-top:8px;">
+      <div class="gauge" id="ovGauge">
+        <span class="gauge-face" id="ovFace"></span>
+        <div class="gauge-inner">
+          <div class="gauge-num" id="ovScore">--</div>
+          <div class="gauge-cap">点 / 100</div>
+        </div>
+      </div>
+      <div class="lbl">総合スコア<span id="ovLabel"></span></div>
     </div>
     <p class="hint" id="ovSummary" style="text-align:center;margin-top:2px"></p>
 
@@ -696,9 +710,25 @@ function scoreColor(s) {
 }
 
 /* ====================== 結果描画 ====================== */
+// 総合スコアをリングゲージで描画（0→score へアニメーションで満ちる）
+function setScoreGauge(score) {
+  const col = scoreHex(score), gauge = $("ovGauge"), num = $("ovScore");
+  num.style.color = col;
+  $("ovFace").textContent = faceFor(score);
+  if (score <= 0) { gauge.style.background = "conic-gradient(#2a3447 0 100%)"; num.textContent = "0"; return; }
+  let cur = 0;
+  const step = () => {
+    cur += Math.max(0.8, (score - cur) * 0.16);
+    if (cur >= score) cur = score;
+    gauge.style.background = `conic-gradient(${col} 0 ${cur}%, #2a3447 ${cur}% 100%)`;
+    num.textContent = Math.round(cur);
+    if (cur < score) requestAnimationFrame(step);
+  };
+  step();
+}
+
 function renderResult(a) {
-  $("ovScore").textContent = a.overall;
-  $("ovScore").style.color = scoreColor(a.overall);
+  setScoreGauge(a.overall);
   $("ovLabel").textContent = " ・ " + scoreLabel(a.overall);
 
   const defs = [
